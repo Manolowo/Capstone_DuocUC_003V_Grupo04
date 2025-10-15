@@ -1,0 +1,119 @@
+-- =========================================
+-- TABLAS
+-- =========================================
+CREATE TABLE cliente (
+    cli_id SERIAL PRIMARY KEY,
+    cli_nom VARCHAR(100),
+    cli_rut VARCHAR(20),
+    cli_telefono VARCHAR(20),
+    cli_mail VARCHAR(100)
+);
+
+CREATE TABLE condicion (
+    con_id SERIAL PRIMARY KEY,
+    con_nom VARCHAR(50)
+);
+
+CREATE TABLE estado (
+    est_id SERIAL PRIMARY KEY,
+    est_nom VARCHAR(50)
+);
+
+CREATE TABLE tipo_pago (
+    tipopago_id SERIAL PRIMARY KEY,
+    tipopago_nom VARCHAR(50)
+);
+
+CREATE TABLE sucursal (
+    suc_id SERIAL PRIMARY KEY,
+    suc_nom VARCHAR(100),
+    suc_direc VARCHAR(150)
+);
+
+CREATE TABLE rol (
+    rol_id SERIAL PRIMARY KEY,
+    rol_nom VARCHAR(50)
+);
+
+CREATE TABLE categoria (
+    cat_id SERIAL PRIMARY KEY,
+    cat_nom VARCHAR(100)
+);
+
+CREATE TABLE usuario (
+    usu_id SERIAL PRIMARY KEY,
+    usu_nom VARCHAR(100),
+    usu_mail VARCHAR(100),
+    usu_password VARCHAR(200),
+    rol_id INT REFERENCES rol(rol_id),
+    suc_id INT REFERENCES sucursal(suc_id)
+);
+
+CREATE TABLE caja (
+    caja_id SERIAL PRIMARY KEY,
+    caja_nom VARCHAR(50),
+    suc_id INT REFERENCES sucursal(suc_id)
+);
+
+CREATE TABLE producto (
+    prod_id SERIAL PRIMARY KEY,
+    prod_codigobarra VARCHAR(50),
+    prod_nom VARCHAR(100),
+    prod_desc VARCHAR(255),
+    prod_prec_compra_unitario DECIMAL(12,2),
+    prod_prec_venta_neto DECIMAL(12,2),
+    prod_prec_venta_final DECIMAL(12,2),
+    prod_afecto_iva BOOLEAN,
+    prod_tipo_unidad VARCHAR(50),
+    prod_marca VARCHAR(50),
+    prod_talla VARCHAR(20),
+    prod_color VARCHAR(30),
+    cat_id INT REFERENCES categoria(cat_id)
+);
+
+CREATE TABLE inventario (
+    inv_id SERIAL PRIMARY KEY,
+    suc_id INT REFERENCES sucursal(suc_id),
+    prod_id INT REFERENCES producto(prod_id),
+    inv_stock DECIMAL(12,2),
+    inv_costeo_neto DECIMAL(12,2),
+    inv_por_vender_neto DECIMAL(12,2),
+    inv_utilidad_neta DECIMAL(12,2),
+    inv_margen_pct DECIMAL(5,2)
+);
+
+CREATE TABLE boleta (
+    bol_id SERIAL PRIMARY KEY,
+    doc_tipo VARCHAR(20),
+    bol_folio INT,
+    bol_fecha TIMESTAMP,
+    cli_id INT REFERENCES cliente(cli_id),
+    bol_total DECIMAL(12,2),
+    bol_despacho VARCHAR(100),
+    con_id INT REFERENCES condicion(con_id),
+    est_id INT REFERENCES estado(est_id),
+    bol_fecha_venc TIMESTAMP,
+    bol_pdf VARCHAR(200),
+    suc_id INT REFERENCES sucursal(suc_id),
+    caja_id INT REFERENCES caja(caja_id),
+    usu_id INT REFERENCES usuario(usu_id)
+);
+
+CREATE TABLE boleta_pago (
+    bolpago_id SERIAL PRIMARY KEY,
+    bol_id INT REFERENCES boleta(bol_id),
+    tipopago_id INT REFERENCES tipo_pago(tipopago_id),
+    bolpago_monto DECIMAL(12,2)
+);
+
+CREATE TABLE venta (
+    ven_id SERIAL PRIMARY KEY,
+    bol_id INT REFERENCES boleta(bol_id),
+    prod_id INT REFERENCES producto(prod_id),
+    ven_fecha DATE,
+    ven_hora TIME,
+    ven_precio_unitario DECIMAL(12,2),
+    ven_cantidad DECIMAL(12,2),
+    ven_descuento DECIMAL(12,2),
+    ven_subtotal DECIMAL(12,2)
+);
