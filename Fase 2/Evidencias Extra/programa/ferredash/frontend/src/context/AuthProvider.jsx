@@ -1,8 +1,8 @@
-import { createContext, useContext, useState } from "react";
+// src/context/AuthProvider.jsx
+import { useState, useEffect } from "react";
+import AuthContext from "./AuthContext";
 
-export const AuthContext = createContext();
-
-export function AuthProvider({ children }) {
+export default function AuthProvider({ children }) {
   const [user, setUser] = useState(() =>
     JSON.parse(localStorage.getItem("user") || "null")
   );
@@ -29,6 +29,11 @@ export function AuthProvider({ children }) {
     localStorage.removeItem("tokens");
   };
 
+  useEffect(() => {
+    setUser(JSON.parse(localStorage.getItem("user") || "null"));
+    setTokens(JSON.parse(localStorage.getItem("tokens") || "null"));
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -46,5 +51,3 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   );
 }
-
-export const useAuth = () => useContext(AuthContext);

@@ -1,0 +1,29 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <title>Ferredash API Docs</title>
+
+  <!-- Estilos personalizados -->
+  <style>
+      body {
+          font-family: "Inter", sans-serif;
+          background: #F9FBFD;
+      }
+      .topbar-wrapper {
+          background: #0A192F !important;
+      }
+      .topbar-wrapper .link span {
+          color: #64FFDA !important;
+          font-size: 22px;
+          font-weight: bold;
+      }
+  </style>
+</head>
+
+<body>
+  <redoc spec-url="{% url 'schema' %}"></redoc>
+</body>
+<script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+</html>

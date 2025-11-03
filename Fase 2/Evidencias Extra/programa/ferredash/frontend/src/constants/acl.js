@@ -1,29 +1,30 @@
 // src/constants/acl.js
 export const MENU_BY_ROLE = {
   gerente: [
-    { to: "/panel", label: "Panel" },
-    { to: "/inventario", label: "Inventario" },
-    { to: "/reportes", label: "Reportes" },
-    { to: "/empleados", label: "Empleados" },
-    { to: "/proveedores", label: "Proveedores" },
-    { to: "/ejecutivo", label: "Ejecutivo" },
-    { to: "/ventas", label: "Ventas" },      // opcional
-    { to: "/clientes", label: "Clientes" },  // opcional
+    { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/inventario", label: "Inventario", icon: "ClipboardList" },
+    { to: "/app/productos", label: "Productos", icon: "Package" },
+    { to: "/app/ventas", label: "Ventas", icon: "ShoppingCart" },
+    { to: "/app/clientes", label: "Clientes", icon: "Users" },
+    { to: "/app/proveedores", label: "Proveedores", icon: "Truck" },
+    { to: "/app/empleados", label: "Empleados", icon: "UserCog" },
+    { to: "/app/reportes", label: "Reportes", icon: "LineChart" },
+    { to: "/app/ejecutivo", label: "Ejecutivo", icon: "ShieldCheck" },
   ],
   vendedor: [
-    { to: "/panel", label: "Panel" },
-    { to: "/ventas", label: "Ventas" },
-    { to: "/clientes", label: "Clientes" },
+    { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/ventas", label: "Ventas", icon: "ShoppingCart" },
+    { to: "/app/clientes", label: "Clientes", icon: "Users" },
   ],
   data_analyst: [
-    { to: "/panel", label: "Panel" },
-    { to: "/reportes", label: "Reportes" }, // o "ModelosPredictivos"
-    { to: "/ejecutivo", label: "Ejecutivo" },
+    { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/reportes", label: "Reportes", icon: "LineChart" },
+    { to: "/app/ejecutivo", label: "Ejecutivo", icon: "ShieldCheck" },
   ],
 };
 
 export const START_ROUTE_BY_ROLE = {
-  gerente: "/panel",
-  vendedor: "/ventas",
-  data_analyst: "/reportes",
+  gerente: "/app/dashboard",
+  vendedor: "/app/ventas",
+  data_analyst: "/app/reportes",
 };
