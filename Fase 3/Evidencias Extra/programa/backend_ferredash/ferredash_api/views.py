@@ -59,6 +59,11 @@ def table_exists(table: str) -> bool:
 class HealthView(APIView):
     permission_classes = [AllowAny]
     def get(self, request):
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SET client_encoding TO 'UTF8'")
+        except Exception:
+            pass
         with connection.cursor() as cur:
             cur.execute("SHOW port;")
             port = int(cur.fetchone()[0])
@@ -116,6 +121,11 @@ class UltimasVentasView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SET client_encoding TO 'UTF8'")
+        except Exception:
+            pass
         limit = int(request.GET.get("limit", 5))
         cols = get_columns("venta")
         colnames = [c for c, _ in cols]
@@ -162,6 +172,11 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SET client_encoding TO 'UTF8'")
+        except Exception:
+            pass
         email = request.user.email
 
         sql = """
@@ -192,7 +207,7 @@ class MeView(APIView):
 # =====================
 
 ALLOWED_TABLES = {
-    "boleta_pago", "caja", "categoria", "cliente", "condicion", "estado",
+    "boleta_pago", "boleta", "caja", "categoria", "cliente", "condicion", "estado",
     "inventario", "producto", "rol", "sucursal", "tipo_pago", "usuario", "venta",
 }
 
@@ -207,6 +222,14 @@ class SqlCrudBase(APIView):
     def _ensure_table(self):
         if self.table_name not in ALLOWED_TABLES or not table_exists(self.table_name):
             return Response({"detail": f"Tabla '{self.table_name}' no permitida."}, status=404)
+        # Ensure client encoding is UTF8 for this DB session so multibyte characters
+        # (like emojis or certain accented characters) aren't mangled.
+        try:
+            with connection.cursor() as cur:
+                cur.execute("SET client_encoding TO 'UTF8'")
+        except Exception:
+            # ignore if the DB doesn't support this command
+            pass
 
     def _limit_offset(self, request):
         try:
@@ -234,17 +257,224 @@ class SqlCrudListView(SqlCrudBase):
         self.table_name = table
         err = self._ensure_table()
         if err: return err
-
         limit, offset = self._limit_offset(request)
         pk_col = self._get_pk_col()
         cols = [c for c, _ in get_columns(self.table_name)]
-        order_col = pk_col or cols[0]
 
-        sql = f'SELECT * FROM public."{self.table_name}" ORDER BY "{order_col}" LIMIT %s OFFSET %s'
+        # detect a sensible date and time columns to allow ordering by newest first
+        date_col = None
+        time_col = None
+
+        # Priorizar nombres específicos para venta
+        if self.table_name == "venta":
+            if "ven_fecha" in cols:
+                date_col = "ven_fecha"
+            if "ven_hora" in cols:
+                time_col = "ven_hora"
+
+        # Si no se encontraron, buscar nombres genéricos
+        if not date_col:
+            date_col = next((c for c in cols if any(k in c.lower() for k in ("fecha","created_at","date","ven_fecha","bol_fecha"))), None)
+        if not time_col:
+            time_col = next((c for c in cols if any(k in c.lower() for k in ("hora","time","ven_hora","bol_hora"))), None)
+
+        # detect price/discount columns for filters
+        price_col = next((c for c in cols if any(k in c.lower() for k in ("bol_total","monto","total","precio","subtotal","importe"))), None)
+        discount_col = next((c for c in cols if any(k in c.lower() for k in ("descuen","discount","ven_descuento"))), None)
+
+        # build dynamic WHERE clauses based on query params (only when matching columns exist)
+        where_clauses = []
+        params = []
+        join_sql = ""
+        table_alias = "t"
+
+        # If listing ventas, alias as v for joins
+        if self.table_name == "venta":
+            table_alias = "v"
+
+        # date range filters
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        if date_col and start_date:
+            where_clauses.append(f'{table_alias}."{date_col}" >= %s')
+            params.append(start_date)
+        if date_col and end_date:
+            where_clauses.append(f'{table_alias}."{date_col}" <= %s')
+            params.append(end_date)
+
+        # price filters
+        min_price = request.query_params.get("min_price")
+        max_price = request.query_params.get("max_price")
+        if price_col and min_price:
+            where_clauses.append(f'{table_alias}."{price_col}" >= %s')
+            params.append(min_price)
+        if price_col and max_price:
+            where_clauses.append(f'{table_alias}."{price_col}" <= %s')
+            params.append(max_price)
+
+        # discount filters
+        min_discount = request.query_params.get("min_discount")
+        max_discount = request.query_params.get("max_discount")
+        if discount_col and min_discount:
+            where_clauses.append(f'{table_alias}."{discount_col}" >= %s')
+            params.append(min_discount)
+        if discount_col and max_discount:
+            where_clauses.append(f'{table_alias}."{discount_col}" <= %s')
+            params.append(max_discount)
+
+        # category filter: accept multiple param names; for producto table it's direct; for venta we join producto
+        cat_id = request.query_params.get("cat_id") or request.query_params.get("cat") or request.query_params.get("categoria")
+        if cat_id:
+            if self.table_name == "producto":
+                if "cat_id" in cols:
+                    where_clauses.append(f'{table_alias}."cat_id" = %s')
+                    params.append(cat_id)
+            elif self.table_name == "venta":
+                # need to join producto to filter by its category
+                v_prod_fk = next((c for c in cols if any(k in c.lower() for k in ("prod_id", "producto_id", "prod", "producto"))), None)
+                if v_prod_fk:
+                    # determine producto primary key name (usually 'id' or 'prod_id')
+                    prod_pk = get_pk_column("producto") or "id"
+                    join_sql = (join_sql or "") + f' LEFT JOIN public.producto p ON p."{prod_pk}" = {table_alias}."{v_prod_fk}" '
+                    where_clauses.append('p."cat_id" = %s')
+                    params.append(cat_id)
+                    try:
+                        print(f"[SqlCrudListView.get] Applying category filter cat_id={cat_id}, detected v_prod_fk={v_prod_fk}, prod_pk={prod_pk}, join_sql={join_sql}")
+                    except Exception:
+                        pass
+
+        # sucursal filter: accept multiple param names; for boleta it's direct, for venta we join boleta
+        # for producto we join inventario to find products available in a sucursal
+        suc_id = request.query_params.get("suc_id") or request.query_params.get("suc") or request.query_params.get("sucursal")
+        if suc_id:
+            if self.table_name == "boleta":
+                if "suc_id" in cols:
+                    where_clauses.append(f'{table_alias}."suc_id" = %s')
+                    params.append(suc_id)
+            elif self.table_name == "inventario":
+                # inventory table has suc_id directly
+                if "suc_id" in cols:
+                    where_clauses.append(f'{table_alias}."suc_id" = %s')
+                    params.append(suc_id)
+            elif self.table_name == "producto":
+                # product listing should be filterable by sucursal via inventario
+                # determine producto PK name
+                prod_pk = get_pk_column("producto") or "prod_id"
+                # join inventario table to filter products present in sucursal
+                join_sql = (join_sql or "") + f' LEFT JOIN public.inventario inv ON inv.prod_id = {table_alias}."{prod_pk}" '
+                where_clauses.append('inv."suc_id" = %s')
+                params.append(suc_id)
+                try:
+                    print(f"[SqlCrudListView.get] Applying sucursal filter to producto via inventario suc_id={suc_id}, prod_pk={prod_pk}, join_sql={join_sql}")
+                except Exception:
+                    pass
+            elif self.table_name == "venta":
+                # detect boleta fk in venta
+                v_bol_fk = next((c for c in cols if any(k in c.lower() for k in ("bol_id", "boleta_id", "bol", "boleta"))), None)
+                if v_bol_fk:
+                    # join boleta as b and filter by its suc_id
+                    join_sql = (join_sql or "") + f' LEFT JOIN public.boleta b ON b.bol_id = {table_alias}."{v_bol_fk}" '
+                    where_clauses.append('b."suc_id" = %s')
+                    params.append(suc_id)
+                    try:
+                        print(f"[SqlCrudListView.get] Applying sucursal filter suc_id={suc_id}, detected v_bol_fk={v_bol_fk}, join_sql={join_sql}")
+                    except Exception:
+                        pass
+
+        # server-side search support: if a `search` query param is present, build sensible WHERE clauses
+        search_q = request.query_params.get("search")
+        if search_q:
+            sparam = f"%{search_q}%"
+            # specialized search for ventas: include producto name/code, boleta folio and cliente name
+            if self.table_name == "venta":
+                # producto join
+                v_prod_fk = next((c for c in cols if any(k in c.lower() for k in ("prod_id","producto_id","prod","producto"))), None)
+                if v_prod_fk:
+                    prod_pk = get_pk_column("producto") or "prod_id" or "id"
+                    join_sql = (join_sql or "") + f' LEFT JOIN public.producto p ON p."{prod_pk}" = {table_alias}."{v_prod_fk}" '
+                    where_clauses.append('(COALESCE(p."prod_nom",\'\') ILIKE %s OR COALESCE(p."prod_codigobarra",\'\') ILIKE %s)')
+                    params.extend([sparam, sparam])
+
+                # boleta join (to search folio) and cliente join (to search cliente nombre)
+                v_bol_fk = next((c for c in cols if any(k in c.lower() for k in ("bol_id","boleta_id","bol","boleta"))), None)
+                if v_bol_fk:
+                    join_sql = (join_sql or "") + f' LEFT JOIN public.boleta b ON b.bol_id = {table_alias}."{v_bol_fk}" '
+                    where_clauses.append('(COALESCE(b."bol_folio"::text,\'\') ILIKE %s)')
+                    params.append(sparam)
+                    # join cliente via boleta
+                    join_sql = (join_sql or "") + ' LEFT JOIN public.cliente c ON c.cli_id = b.cli_id '
+                    where_clauses.append('COALESCE(c."cli_nom",\'\') ILIKE %s')
+                    params.append(sparam)
+
+                # also allow searching by venta primary key exact match
+                try:
+                    if pk_col:
+                        where_clauses.append(f'{table_alias}."{pk_col}"::text = %s')
+                        params.append(search_q)
+                except Exception:
+                    pass
+            else:
+                # generic search: try to match against textual columns if any
+                try:
+                    col_info = get_columns(self.table_name)
+                    text_cols = [c for c, t in col_info if any(k in (t or "").lower() for k in ("char", "text", "varchar"))]
+                    if text_cols:
+                        cond = " OR ".join(f'{table_alias}."{c}" ILIKE %s' for c in text_cols)
+                        where_clauses.append('(' + cond + ')')
+                        params.extend([sparam] * len(text_cols))
+                    else:
+                        # fallback: cast pk to text and like-search
+                        if pk_col:
+                            where_clauses.append(f'{table_alias}."{pk_col}"::text ILIKE %s')
+                            params.append(sparam)
+                except Exception:
+                    # if anything goes wrong, ignore server-side search gracefully
+                    pass
+
+        # build base SQL
+        base_from = f'FROM public."{self.table_name}" {table_alias}'
+        if join_sql:
+            base_from = base_from + join_sql
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        # CORREGIDO: Lógica de ordenamiento simplificada y sin duplicados
+        sort_by = request.query_params.get("sort")
+        if self.table_name == "venta":
+            # For venta: ORDER by date DESC NULLS LAST, then time DESC NULLS LAST
+            if date_col and time_col:
+                order_clause = f'ORDER BY {table_alias}."{date_col}" DESC NULLS LAST, {table_alias}."{time_col}" DESC NULLS LAST'
+            elif date_col:
+                order_clause = f'ORDER BY {table_alias}."{date_col}" DESC NULLS LAST'
+            else:
+                # Fallback to PK if no date column found
+                order_clause = f'ORDER BY {table_alias}."{pk_col}" DESC'
+        elif date_col and time_col:
+            # For other tables with both date and time: order by date then time
+            order_clause = f'ORDER BY {table_alias}."{date_col}" DESC NULLS LAST, {table_alias}."{time_col}" DESC NULLS LAST'
+        elif date_col:
+            # For tables with only date: order by date then PK
+            order_clause = f'ORDER BY {table_alias}."{date_col}" DESC NULLS LAST, {table_alias}."{pk_col}" DESC'
+        else:
+            # Default: order by PK descending
+            order_clause = f'ORDER BY {table_alias}."{pk_col}" DESC'
+
+        count_sql = f'SELECT COUNT(*) {base_from} {where_sql}'
+        data_sql = f'SELECT {table_alias}.* {base_from} {where_sql} {order_clause} LIMIT %s OFFSET %s'
+
         with connection.cursor() as cur:
-            cur.execute(f'SELECT COUNT(*) FROM public."{self.table_name}"')
+            # debug: show SQL and params to help troubleshoot filters
+            try:
+                print(f"[SqlCrudListView.get] table={self.table_name} date_col={date_col} time_col={time_col}")
+                print("[SqlCrudListView.get] order_clause:", order_clause)
+                print("[SqlCrudListView.get] data_sql:", data_sql)
+                print("[SqlCrudListView.get] params:", params, "limit:", limit, "offset:", offset)
+            except Exception:
+                pass
+            # total count with same filters
+            cur.execute(count_sql, params)
             total = cur.fetchone()[0]
-            cur.execute(sql, [limit, offset])
+            cur.execute(data_sql, params + [limit, offset])
             rows = dictfetchall(cur)
 
         return Response({
@@ -265,18 +495,93 @@ class SqlCrudListView(SqlCrudBase):
         cols = self._valid_payload_cols(body, include_pk=False)
         pk = self._get_pk_col()
 
+        # If inserting into venta, ensure we include server-side date/time
+        # columns (if present in the DB) so new ventas have current timestamp
+        # and sort properly. We only add them when they are missing from the payload.
+        if self.table_name == "venta":
+            try:
+                db_cols = [c for c, _ in get_columns(self.table_name)]
+                
+                # Buscar columna de fecha
+                fecha_col = None
+                if "ven_fecha" in db_cols:
+                    fecha_col = "ven_fecha"
+                else:
+                    fecha_col = next((c for c in db_cols if any(k in c.lower() for k in ("ven_fecha","bol_fecha","fecha","created_at","date"))), None)
+                
+                # Buscar columna de hora  
+                hora_col = None
+                if "ven_hora" in db_cols:
+                    hora_col = "ven_hora"
+                else:
+                    hora_col = next((c for c in db_cols if any(k in c.lower() for k in ("ven_hora","hora","time"))), None)
+                
+                # Solo agregar si no están en el payload y existen en la tabla
+                current_time = now()
+                if fecha_col and fecha_col not in cols and fecha_col in db_cols:
+                    cols.append(fecha_col)
+                    body[fecha_col] = current_time.date()
+                    
+                if hora_col and hora_col not in cols and hora_col in db_cols:
+                    cols.append(hora_col)
+                    body[hora_col] = current_time.time().replace(microsecond=0)
+                    
+            except Exception as e:
+                print(f"Error setting date/time for venta: {e}")
+                # Continuar sin fecha/hora si hay error
+
+        # If no valid columns were found in the payload, return a helpful error
+        if not cols:
+            allowed = [c for c, _ in get_columns(self.table_name)]
+            return Response({
+                "detail": "No valid payload columns for table",
+                "payload_keys": list(body.keys()),
+                "allowed_columns": allowed
+            }, status=400)
+
         cols_sql = ",".join(f'"{c}"' for c in cols)
         params_sql = ",".join(["%s"] * len(cols))
         values = [body[c] for c in cols]
 
-        with connection.cursor() as cur:
-            cur.execute(
-                f'INSERT INTO "{self.table_name}" ({cols_sql}) VALUES ({params_sql}) RETURNING "{pk}"',
-                values
-            )
-            new_id = cur.fetchone()[0]
-            cur.execute(f'SELECT * FROM "{self.table_name}" WHERE "{pk}"=%s', [new_id])
-            created = dictfetchall(cur)[0]
+        try:
+            with connection.cursor() as cur:
+                # Attempt to fix possible sequence desynchronization for serial PKs
+                try:
+                    pk_col_escaped = pk
+                    seq_sql = f"SELECT pg_get_serial_sequence('public.\"{self.table_name}\"', %s)"
+                    cur.execute(seq_sql, [pk_col_escaped])
+                    seq_name = cur.fetchone()[0]
+                    if seq_name:
+                        # set sequence last_value to max(pk) so nextval() returns max+1
+                        fix_sql = f"SELECT setval(%s, COALESCE((SELECT MAX(\"{pk}\") FROM public.\"{self.table_name}\"), 0), true)"
+                        cur.execute(fix_sql, [seq_name])
+                except Exception:
+                    # non-fatal: if sequence fix fails, continue and let the insert attempt run
+                    pass
+                # perform insert
+                cur.execute(
+                    f'INSERT INTO "{self.table_name}" ({cols_sql}) VALUES ({params_sql}) RETURNING "{pk}"',
+                    values
+                )
+                new_id = cur.fetchone()[0]
+                cur.execute(f'SELECT * FROM "{self.table_name}" WHERE "{pk}"=%s', [new_id])
+                created = dictfetchall(cur)[0]
+        except Exception as e:
+            # mark transaction for rollback so outer atomic doesn't try to commit an aborted transaction
+            try:
+                transaction.set_rollback(True)
+            except Exception:
+                pass
+            # debug logging to console to inspect what's being sent
+            try:
+                print("[SqlCrudListView.post] ERROR inserting into table:", self.table_name)
+                print("payload:", body)
+                print("cols:", cols)
+                print("values:", values)
+                print("error:", str(e))
+            except Exception:
+                pass
+            return Response({"detail": str(e)}, status=500)
 
         return Response(created, status=201)
 
@@ -292,6 +597,10 @@ class SqlCrudDetailView(SqlCrudBase):
             cur.execute(f'SELECT * FROM "{self.table_name}" WHERE "{pk_col}"=%s', [pk])
             rows = dictfetchall(cur)
         return Response(rows[0] if rows else {"detail": "No encontrado"})
+
+
+    # NOTE: SchemaView moved to module level below. It was previously nested here
+    # inside SqlCrudDetailView which prevented importing it from other modules.
 
     @transaction.atomic
     def patch(self, request, table: str, pk: int):
@@ -332,6 +641,23 @@ class SqlCrudDetailView(SqlCrudBase):
         return Response(status=204)
 
 # =====================
+# =====================
+# Schema endpoint (module-level so it can be imported from urls)
+
+class SchemaView(APIView):
+    """Return column metadata for a given table name (column_name, data_type)"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, table: str):
+        if not table_exists(table):
+            return Response({"detail": "Table not found"}, status=404)
+        try:
+            cols = get_columns(table)
+            return Response({"columns": [{"name": c, "type": t} for c, t in cols]})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+
 # Login personalizado para frontend
 # =====================
 

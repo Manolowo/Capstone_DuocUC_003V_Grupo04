@@ -4,6 +4,7 @@ from .views import (
     DashboardKpisView, UltimasVentasView,
     MeView, CustomLoginView,
     SqlCrudListView, SqlCrudDetailView,
+    SchemaView,
 )
 from .auth_views import LoginUsuarioView
 
@@ -17,6 +18,7 @@ urlpatterns = [
     path("auth/login/", LoginUsuarioView.as_view(), name="login_usuario"),
 
     path("boleta_pago", SqlCrudListView.as_view(), kwargs={"table": "boleta_pago"}),
+    path("boleta", SqlCrudListView.as_view(), kwargs={"table": "boleta"}),
     path("caja",        SqlCrudListView.as_view(), kwargs={"table": "caja"}),
     path("categoria",   SqlCrudListView.as_view(), kwargs={"table": "categoria"}),
     path("cliente",     SqlCrudListView.as_view(), kwargs={"table": "cliente"}),
@@ -29,8 +31,10 @@ urlpatterns = [
     path("tipo_pago",   SqlCrudListView.as_view(), kwargs={"table": "tipo_pago"}),
     path("usuario",     SqlCrudListView.as_view(), kwargs={"table": "usuario"}),
     path("venta",       SqlCrudListView.as_view(), kwargs={"table": "venta"}),
+    path("schema/<str:table>", SchemaView.as_view()),
 
     path("boleta_pago/<int:pk>", SqlCrudDetailView.as_view(), kwargs={"table": "boleta_pago"}),
+    path("boleta/<int:pk>", SqlCrudDetailView.as_view(), kwargs={"table": "boleta"}),
     path("caja/<int:pk>",        SqlCrudDetailView.as_view(), kwargs={"table": "caja"}),
     path("categoria/<int:pk>",   SqlCrudDetailView.as_view(), kwargs={"table": "categoria"}),
     path("cliente/<int:pk>",     SqlCrudDetailView.as_view(), kwargs={"table": "cliente"}),

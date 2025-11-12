@@ -8,6 +8,42 @@ export const api = axios.create({
   timeout: 15000,
 });
 
+// Interceptor para añadir token Authorization si existe en localStorage
+api.interceptors.request.use((config) => {
+  try {
+    const tokens = JSON.parse(localStorage.getItem("tokens") || "null");
+    if (tokens?.access) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${tokens.access}`;
+    }
+  } catch (e) {
+    // ignore parse errors
+  }
+  return config;
+});
+
+// Interceptor global de respuestas para manejar 401 de token inválido/expirado
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail || "";
+    if (status === 401 && /token provisto|token no v[aá]lido|invalid token/i.test(detail)) {
+      try {
+        localStorage.removeItem("tokens");
+        localStorage.removeItem("user");
+      } catch (e) {}
+      // redirigir al login para que el usuario vuelva a autenticarse
+      if (typeof window !== "undefined") {
+        // mostrar alerta breve antes de redirigir
+        alert("Sesión inválida o expirada. Por favor, inicia sesión nuevamente.");
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Helpers --------
 export const getMe = async (id = 1) => {
   const res = await api.get(`/me`, { params: { id } });
@@ -22,6 +58,11 @@ export const getDashboardKpis = async () => {
 
 export const getUltimasVentas = async (limit = 5) => {
   const res = await api.get(`/dashboard/ultimas-ventas`, { params: { limit } });
+  return { data: res.data, status: res.status };
+};
+
+export const getTableSchema = async (table) => {
+  const res = await api.get(`/schema/${table}`);
   return { data: res.data, status: res.status };
 };
 
@@ -60,4 +101,26 @@ export const listTable = async (table, params = {}) => {
   }
   // si todos fallaron, lanzar el último error
   throw lastErr;
+};
+
+// CRUD helpers
+export const createRecord = async (table, payload = {}) => {
+  const res = await api.post(`/${table}`, payload);
+  return { data: res.data, status: res.status };
+};
+
+export const updateRecord = async (table, pk, payload = {}) => {
+  const res = await api.patch(`/${table}/${pk}`, payload);
+  return { data: res.data, status: res.status };
+};
+
+export const deleteRecord = async (table, pk) => {
+  const res = await api.delete(`/${table}/${pk}`);
+  return { status: res.status };
+};
+
+export const getRecord = async (table, pk) => {
+  const res = await api.get(`/${table}/${pk}`);
+  // the detail endpoint returns a single object or {detail:..}
+  return { data: res.data, status: res.status };
 };

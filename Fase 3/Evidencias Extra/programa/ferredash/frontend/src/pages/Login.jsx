@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -50,21 +50,36 @@ export default function Login() {
     }
   }
 
+  // Generar partículas una sola vez para evitar reiniciar animación en cada render
+  const particles = useMemo(() => {
+    return Array.from({ length: 30 }).map(() => ({
+      top: `${Math.random() * 100}%`,
+      left: `${Math.random() * 100}%`,
+      width: `${8 + Math.random() * 12}px`,
+      height: `${8 + Math.random() * 12}px`,
+      animationDuration: `${6 + Math.random() * 8}s`,
+      animationDelay: `${Math.random() * 6}s`,
+    }));
+  }, []);
+
   return (
-    <div className="min-h-screen flex items-center justify-center relative bg-[#0a0f1f] overflow-hidden text-white">
-      {[...Array(30)].map((_, i) => (
-        <span
-          key={i}
-          className="particle"
-          style={{
-            top: `${Math.random() * 100}%`,
-            left: `${Math.random() * 100}%`,
-            width: `${8 + Math.random() * 12}px`,
-            height: `${8 + Math.random() * 12}px`,
-            animationDuration: `${6 + Math.random() * 8}s`,
-          }}
-        />
-      ))}
+    <div className="min-h-screen flex items-center justify-center relative bg-[#0a0f1f] text-white">
+      <div className="particles-container fixed inset-0 pointer-events-none -z-10">
+        {particles.map((s, i) => (
+          <span
+            key={i}
+            className="particle"
+            style={{
+              top: s.top,
+              left: s.left,
+              width: s.width,
+              height: s.height,
+              animationDuration: s.animationDuration,
+              animationDelay: s.animationDelay,
+            }}
+          />
+        ))}
+      </div>
 
       <div className="glass-card relative w-full max-w-md rounded-2xl p-8 z-10">
         <h1 className="text-center text-3xl font-bold text-indigo-400 drop-shadow">
@@ -110,7 +125,10 @@ export default function Login() {
 
           <button
             disabled={loading}
-            className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white py-2 transition font-semibold shadow-md hover:shadow-indigo-500/50"
+            className={`w-full rounded-lg bg-indigo-600 text-white py-2 transition font-semibold shadow-md hover:shadow-indigo-500/50 ${
+              loading ? "opacity-60 cursor-not-allowed" : "hover:bg-indigo-500"
+            }`}
+            aria-busy={loading}
           >
             {loading ? "Ingresando..." : "Ingresar"}
           </button>
