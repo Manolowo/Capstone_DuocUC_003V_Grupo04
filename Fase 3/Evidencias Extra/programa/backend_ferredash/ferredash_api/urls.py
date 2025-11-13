@@ -4,7 +4,7 @@ from .views import (
     DashboardKpisView, UltimasVentasView,
     MeView, CustomLoginView,
     SqlCrudListView, SqlCrudDetailView,
-    SchemaView,
+    SchemaView, VentaBatchView,
 )
 from .auth_views import LoginUsuarioView
 
@@ -31,6 +31,7 @@ urlpatterns = [
     path("tipo_pago",   SqlCrudListView.as_view(), kwargs={"table": "tipo_pago"}),
     path("usuario",     SqlCrudListView.as_view(), kwargs={"table": "usuario"}),
     path("venta",       SqlCrudListView.as_view(), kwargs={"table": "venta"}),
+    path("venta/batch", VentaBatchView.as_view()),
     path("schema/<str:table>", SchemaView.as_view()),
 
     path("boleta_pago/<int:pk>", SqlCrudDetailView.as_view(), kwargs={"table": "boleta_pago"}),

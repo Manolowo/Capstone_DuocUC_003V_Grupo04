@@ -513,7 +513,7 @@ export default function DataBrowser({ table, title }) {
       <div className="flex items-start justify-between">
         <h1 className="text-xl font-semibold mb-4">{title}</h1>
         <div>
-          <button onClick={openCreate} className="bg-green-600 text-white px-3 py-1 rounded">Nuevo</button>
+          <button onClick={openCreate} className="bg-green-600 text-white px-3 py-1 rounded">{table === 'venta' ? 'Añadir venta' : 'Nuevo'}</button>
         </div>
       </div>
 
