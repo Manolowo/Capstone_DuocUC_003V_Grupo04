@@ -1,0 +1,86 @@
+-- ==========================================================
+-- VISTA: vw_ferredash_raw
+-- OBJETIVO:
+--   Centralizar la información de ventas históricas con fines
+--   analíticos y predictivos. Esta vista servirá como base para
+--   generar un CSV que luego se utilizará en modelos de Machine Learning.
+--   
+--   Permite responder preguntas como:
+--     - ¿Qué productos se venden más o menos según mes, sucursal o vendedor?
+--     - ¿Qué combinaciones de productos se compran juntas?
+--     - ¿Qué relación hay entre el stock y las ventas futuras?
+-- ==========================================================
+
+CREATE OR REPLACE VIEW vw_ferredash_raw AS
+SELECT
+    -- ======================================================
+    -- Identificación temporal de la venta
+    -- ======================================================
+    v.ven_id,                              -- ID único de la venta
+    v.ven_fecha::date AS fecha_venta,      -- Fecha exacta de la venta
+    EXTRACT(YEAR FROM v.ven_fecha) AS anio, -- Año de la venta
+    EXTRACT(MONTH FROM v.ven_fecha) AS mes, -- Mes de la venta (1 a 12)
+    TO_CHAR(v.ven_fecha, 'FMDay') AS dia_semana, -- Día de la semana (ej: Monday)
+
+    -- ======================================================
+    -- Información del producto
+    -- ======================================================
+    p.prod_id,               -- ID del producto
+    p.prod_nom,              -- Nombre del producto
+    p.prod_marca,            -- Marca (útil para analizar preferencias por marca)
+    c.cat_nom AS categoria,  -- Categoría del producto (ej: Herramientas, Pinturas, etc.)
+    p.prod_prec_venta_final AS precio_venta, -- Precio final de venta (incluye IVA u otros ajustes)
+
+    -- ======================================================
+    -- Datos transaccionales de la venta
+    -- ======================================================
+    v.ven_cantidad,            -- Cantidad de unidades vendidas
+    v.ven_descuento,           -- Descuento aplicado en la venta (si existe)
+    v.ven_precio_unitario,     -- Precio unitario en el momento de la venta
+    v.ven_subtotal AS ingreso_neto, -- Ingreso total de la venta (cantidad x precio - descuento)
+
+    -- ======================================================
+    -- Información de la sucursal y del vendedor
+    -- ======================================================
+    s.suc_id,                 -- ID de la sucursal donde se realizó la venta
+    s.suc_nom AS sucursal,    -- Nombre de la sucursal
+    u.usu_id,                 -- ID del usuario/vendedor que realizó la venta
+    u.usu_nom AS vendedor,    -- Nombre del vendedor
+
+    -- ======================================================
+    -- Información del cliente
+    -- ======================================================
+    b.cli_id,                 -- ID del cliente asociado a la boleta
+    cl.cli_nom AS cliente,    -- Nombre del cliente (permite analizar fidelidad o recurrencia)
+
+    -- ======================================================
+    -- Datos de inventario (para análisis de stock)
+    --   Se dejan solo métricas útiles para correlacionar con ventas.
+    --   No se incluyen datos de compra o costos.
+    -- ======================================================
+    COALESCE(i.inv_stock, 0) AS stock_actual,           -- Stock disponible en la sucursal
+    COALESCE(i.inv_por_vender_neto, 0) AS valor_stock_pendiente, -- Valor monetario de stock no vendido
+    COALESCE(i.inv_utilidad_neta, 0) AS utilidad_acumulada        -- Utilidad acumulada del producto
+
+-- ==========================================================
+-- Relaciones entre tablas
+-- ==========================================================
+FROM venta v
+-- Producto y categoría
+JOIN producto p ON v.prod_id = p.prod_id
+JOIN categoria c ON p.cat_id = c.cat_id
+
+-- Boleta: une la venta con cliente, sucursal y vendedor
+JOIN boleta b ON v.bol_id = b.bol_id
+
+-- Sucursal donde se hizo la venta
+JOIN sucursal s ON b.suc_id = s.suc_id
+
+-- Usuario (vendedor) responsable de la venta
+JOIN usuario u ON b.usu_id = u.usu_id
+
+-- Inventario: se asocia el producto y la sucursal
+LEFT JOIN inventario i ON i.prod_id = p.prod_id AND i.suc_id = s.suc_id
+
+-- Cliente: puede ser opcional, por eso LEFT JOIN
+LEFT JOIN cliente cl ON b.cli_id = cl.cli_id;

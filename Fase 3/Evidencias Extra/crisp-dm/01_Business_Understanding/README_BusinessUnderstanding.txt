@@ -6,21 +6,21 @@ Aquí se establecen las bases conceptuales sobre las cuales se construirá todo 
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-🗒️ 01_01_objetivos.md
+🗒️ 1.1_objetivos.md
 
 Documento que describe los objetivos principales del proyecto, tanto estratégicos como analíticos.  
 Permite entender qué busca lograr la organización mediante el uso de datos y qué metas guiarán el desarrollo posterior del modelo o análisis.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-🗒️ 01_02_preguntas_negocio.md
+🗒️ 1.2_preguntas_negocio.md
 
 Archivo que recoge las preguntas clave del negocio que se espera responder con el análisis de datos.  
 Estas preguntas orientan las futuras exploraciones, modelamientos y evaluaciones, asegurando que el proyecto mantenga una conexión directa con las necesidades reales de la organización.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-🗒️ 01_03_criterios_exito.md
+🗒️ 1.3_criterios_exito.md
 
 Documento que define los criterios de éxito que permitirán evaluar el impacto y la efectividad del proyecto.  
 Establece las condiciones que deben cumplirse para considerar que los resultados satisfacen las expectativas del negocio y entregan valor tangible.
