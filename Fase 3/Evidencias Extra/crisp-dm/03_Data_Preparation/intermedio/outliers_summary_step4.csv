@@ -1,0 +1,7 @@
+column,n_missing,n_moderate,n_extreme,pct_extreme
+precio_venta,0,11695,3475,1.925047779962884
+ven_cantidad,0,25436,15893,8.804254494086363
+ingreso_calculado,0,13121,5844,3.237404093842617
+precio_unitario_calc,0,14389,6304,3.492230562557128
+valor_stock_pendiente,0,36310,26880,14.89072930227405
+utilidad_acumulada,0,36310,26880,14.89072930227405
