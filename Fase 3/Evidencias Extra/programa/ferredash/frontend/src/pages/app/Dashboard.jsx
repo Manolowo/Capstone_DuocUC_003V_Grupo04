@@ -135,16 +135,6 @@ export default function Dashboard() {
     return () => { mounted = false };
   }, [selectedSucursal]);
 
-  // Construir datos de KPI manteniendo el valor numérico para formateo adaptativo
-  const stats = [
-    { title: "Total ventas", raw: kpis?.totalVentas ?? null, fallback: "-", sub: "Históricas" },
-    { title: "Total productos", raw: kpis?.totalProductos ?? null, fallback: "-", sub: "En catálogo" },
-    { title: "Total clientes", raw: kpis?.totalClientes ?? null, fallback: "-", sub: "Activos" },
-    { title: "Ticket promedio (7d)", raw: avgTicket ?? null, fallback: "-", sub: "Promedio 7d", currency: true },
-    { title: "Ganancias semanales", raw: weeklyGainsTotal ?? null, fallback: "-", sub: "Últimos 7 días", currency: true },
-    { title: "Ganancias totales", raw: kpis?.gananciasTotales ?? null, fallback: "-", sub: "Acumulado", currency: true },
-  ];
-
   const formatCurrency = (v) => {
     try {
       const n = Number(v || 0);
@@ -188,175 +178,283 @@ export default function Dashboard() {
     return <motion.span animate={{ scale: [0.94, 1] }} transition={{ duration: 0.5 }}>{display}</motion.span>;
   }
 
+  // Las 4 cartas principales
+  const mainStats = [
+    { 
+      title: "Total Ventas", 
+      raw: kpis?.totalVentas ?? null, 
+      fallback: "-", 
+      sub: "Históricas",
+      color: "blue"
+    },
+    { 
+      title: "Total Productos", 
+      raw: kpis?.totalProductos ?? null, 
+      fallback: "-", 
+      sub: "En catálogo",
+      color: "purple"
+    },
+    { 
+      title: "Total Clientes", 
+      raw: kpis?.totalClientes ?? null, 
+      fallback: "-", 
+      sub: "Activos",
+      color: "green"
+    },
+    { 
+      title: "Ticket Promedio", 
+      raw: avgTicket ?? null, 
+      fallback: "-", 
+      sub: "Últimos 7 días", 
+      currency: true,
+      color: "orange"
+    },
+  ];
+
+  // Cartas de ganancias (más grandes)
+  const gainStats = [
+    { 
+      title: "Ganancias Semanales", 
+      raw: weeklyGainsTotal ?? null, 
+      fallback: "-", 
+      sub: "Últimos 7 días", 
+      currency: true,
+      color: "emerald"
+    },
+    { 
+      title: "Ganancias Totales", 
+      raw: kpis?.gananciasTotales ?? null, 
+      fallback: "-", 
+      sub: "Acumulado histórico", 
+      currency: true,
+      color: "indigo"
+    },
+  ];
+
+  const getColorClasses = (color) => {
+    const colors = {
+      blue: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-600' },
+      purple: { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600' },
+      green: { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-600' },
+      orange: { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-600' },
+      emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600' },
+      indigo: { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-600' }
+    };
+    return colors[color] || colors.blue;
+  };
+
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-extrabold text-gray-800">Dashboard</h1>
-          <p className="text-sm text-gray-500">Resumen rápido de ventas, clientes y ganancias</p>
-          {error && <p className="text-red-600 font-semibold mt-2">⚠ Error: {error}</p>}
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="text-sm text-gray-600">Sucursal:</label>
-          <select
-            value={selectedSucursal}
-            onChange={(e) => setSelectedSucursal(e.target.value)}
-            className="border rounded-md px-3 py-2 bg-white text-sm"
-          >
-            <option value="">Todas</option>
-            {sucursales.map((s) => (
-              // soportar distintos nombres de id/label devueltos por la API
-              <option key={s.id || s.suc_id || s.sucId || s.pk || JSON.stringify(s)} value={s.id ?? s.suc_id ?? s.sucId ?? s.pk ?? s[Object.keys(s)[0]]}>
-                {s.suc_nom || s.nombre || s.name || s.nom || s.label || s[Object.keys(s)[1]] || String(s.id)}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* KPIs animados */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((s, i) => {
-          const display = formatValue(s);
-            // generar serie simple para las tarjetas de ganancias
-            let series = [];
-            let chartLabels = [];
-            const isGains = s.title === 'Ganancias totales';
-            const isWeeklyGains = s.title === 'Ganancias semanales';
-            if (isGains) {
-              if (kpis?.gananciasSeries && Array.isArray(kpis.gananciasSeries)) {
-                series = kpis.gananciasSeries;
-                if (kpis?.gananciasLabels && Array.isArray(kpis.gananciasLabels) && kpis.gananciasLabels.length === series.length) {
-                  chartLabels = kpis.gananciasLabels;
-                }
-              } else {
-                const base = Number(kpis?.gananciasTotales || 1000);
-                series = Array.from({ length: 12 }, (_, idx) => Math.max(0, Math.round(base * (0.6 + 0.8 * Math.sin(idx / 2 + 0.5) + (Math.random() - 0.5) * 0.05))));
-                // si la serie tiene 12 puntos, asumir meses
-                if (series.length === 12) chartLabels = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-              }
-            } else if (isWeeklyGains) {
-              if (weeklyGainsSeries && Array.isArray(weeklyGainsSeries) && weeklyGainsSeries.length > 0) {
-                series = weeklyGainsSeries;
-                if (weeklySalesDates && weeklySalesDates.length === weeklyGainsSeries.length) chartLabels = weeklySalesDates.map(d => localDateFromISO(d).toLocaleDateString('es-CL',{ weekday: 'short' }));
-              } else if (kpis?.gananciasSeries && Array.isArray(kpis.gananciasSeries)) {
-                series = kpis.gananciasSeries.slice(-7);
-              }
-            }
-            const long = String(display).length > 12;
-            const valueSize = long ? 'text-2xl' : 'text-4xl';
-            // styles especiales para Ganancias
-            const cardBase = `p-6 rounded-2xl border transition-all transform duration-200 hover:shadow-2xl hover:-translate-y-1`;
-            const valueColor = isGains ? 'text-white' : (isWeeklyGains ? 'text-white' : 'text-purple-600');
-          const valueClass = `${isGains ? (long ? 'text-3xl' : 'text-6xl') : valueSize} font-extrabold ${valueColor} mt-2 break-words leading-tight`;
-          const cardBg = isGains ? 'bg-gradient-to-r from-green-600 to-green-500 border-green-600 text-white' : (isWeeklyGains ? 'bg-gradient-to-r from-amber-600 to-amber-500 border-amber-600 text-white' : 'bg-white border-gray-200');
-
-          return (
-            <motion.div
-                key={i}
-                className={`${cardBase} ${cardBg} shadow-lg ${(isGains || isWeeklyGains) ? 'lg:col-span-2 sm:col-span-2' : ''}`}
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                    <h3 className="text-gray-500 text-sm truncate">{s.title}</h3>
-                  <p className={valueClass}>{(typeof s.raw === 'number') ? <NumberAnimated value={s.raw} currency={!!s.currency} /> : display}</p>
-                  <p className="text-xs text-gray-400 mt-1">{s.sub}</p>
-                  {(isGains || isWeeklyGains) && series.length > 0 && (
-                    <div className="w-full mt-4">
-                      <MiniAreaChart data={series} color={isGains ? '#16a34a' : '#d97706'} height={56} invert={isGains || isWeeklyGains} />
-                      {/* Etiquetas de tiempo para Ganancias totales y Ganancias semanales (texto blanco) */}
-                      {(chartLabels && chartLabels.length === series.length) ? (
-                        <div className="grid gap-1 mt-2 text-xs text-white" style={{ gridTemplateColumns: `repeat(${chartLabels.length}, minmax(0, 1fr))` }}>
-                          {chartLabels.map((lab, idx) => (
-                            <div key={String(lab) + idx} className="text-center">{lab}</div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="grid gap-1 mt-2 text-xs text-white" style={{ gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
-                          {((weeklySalesDates && weeklySalesDates.length === 7) ? weeklySalesDates : getLast7Dates()).map((d) => (
-                            <div key={d} className="text-center">{localDateFromISO(d).toLocaleDateString('es-CL', { weekday: 'short' })}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {/* pequeño acento decorativo */}
-                <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-white/60 border border-gray-100">
-                  {isGains ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2" />
-                    </svg>
-                  ) : isWeeklyGains ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h4l3 8 4-16 3 8h4" />
-                    </svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18M3 12h18M3 17h18" />
-                    </svg>
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
-      </div>
-
-      {/* Gráfica adicional: Ventas últimos 7 días */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mt-8">
-        <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-lg">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">Ventas últimos 7 días</h2>
-            <p className="text-sm text-gray-400">Resumen</p>
+    <div className="min-h-screen bg-gray-50/50 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        
+        {/* Header */}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-8">
+          <div className="mb-4 lg:mb-0">
+            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+            <p className="text-gray-600 mt-2">Resumen general de ventas, clientes y métricas de negocio</p>
           </div>
-          <p className="text-2xl font-extrabold text-blue-600 mt-3">{(weeklySalesCounts ? weeklySalesCounts.reduce((a,b)=>a+b,0) : (kpis?.totalVentas ?? '-'))} ventas</p>
-          <div className="mt-4">
-            <MiniBarChart data={weeklySalesCounts ?? generateWeeklySales(kpis)} color="#3b82f6" height={64} />
-            {/* etiquetas de días (Lun..Dom) */}
-            <div className="grid grid-cols-7 gap-1 mt-2 text-xs text-gray-500">
-              {((weeklySalesDates && weeklySalesDates.length === 7) ? weeklySalesDates : getLast7Dates()).map((d) => (
-                <div key={d} className="text-center">{localDateFromISO(d).toLocaleDateString('es-CL', { weekday: 'short' })}</div>
+          
+          <div className="flex items-center gap-4">
+            {error && (
+              <div className="flex items-center text-red-600 text-sm">
+                <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                {error}
+              </div>
+            )}
+            
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Sucursal:</label>
+              <select
+                value={selectedSucursal}
+                onChange={(e) => setSelectedSucursal(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              >
+                <option value="">Todas las sucursales</option>
+                {sucursales.map((s) => (
+                  <option key={s.id || s.suc_id || s.sucId || s.pk || JSON.stringify(s)} value={s.id ?? s.suc_id ?? s.sucId ?? s.pk ?? s[Object.keys(s)[0]]}>
+                    {s.suc_nom || s.nombre || s.name || s.nom || s.label || s[Object.keys(s)[1]] || String(s.id)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Cartas Principales */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {mainStats.map((s, i) => {
+            const display = formatValue(s);
+            const colorClasses = getColorClasses(s.color);
+            
+            return (
+              <motion.div
+                key={i}
+                className={`bg-white rounded-xl border ${colorClasses.border} p-6 shadow-sm hover:shadow-md transition-all duration-300`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+              >
+                <div className="text-center">
+                  <h3 className="text-sm font-medium text-gray-600 mb-1">{s.title}</h3>
+                  <p className="text-xs text-gray-400 mb-4">{s.sub}</p>
+                  
+                  <div className={`text-3xl font-bold ${colorClasses.text} mb-2`}>
+                    {(typeof s.raw === 'number') ? 
+                      <NumberAnimated value={s.raw} currency={!!s.currency} /> : 
+                      display
+                    }
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* Cartas de Ganancias (Más grandes) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {gainStats.map((s, i) => {
+            const display = formatValue(s);
+            const colorClasses = getColorClasses(s.color);
+            const isWeekly = s.title === 'Ganancias Semanales';
+            const chartData = isWeekly ? weeklyGainsSeries : generateTrendData(s.raw);
+            
+            return (
+              <motion.div
+                key={i}
+                className={`bg-white rounded-xl border ${colorClasses.border} p-6 shadow-sm hover:shadow-md transition-all duration-300`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: (i + 4) * 0.1 }}
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{s.title}</h3>
+                    <p className="text-sm text-gray-500">{s.sub}</p>
+                  </div>
+                </div>
+                
+                <div className={`text-4xl font-bold ${colorClasses.text} mb-6`}>
+                  {(typeof s.raw === 'number') ? 
+                    <NumberAnimated value={s.raw} currency={!!s.currency} /> : 
+                    display
+                  }
+                </div>
+
+                {/* Gráfico más grande para ganancias */}
+                {s.raw && (
+                  <div className="mt-4">
+                    <MiniAreaChart 
+                      data={chartData}
+                      color={colorClasses.text.replace('text-', '')}
+                      height={80}
+                    />
+                    
+                    {/* Etiquetas de días para ganancias semanales */}
+                    {isWeekly && weeklySalesDates && (
+                      <div className="grid grid-cols-7 gap-2 mt-4 text-xs text-gray-500">
+                        {weeklySalesDates.map((d) => (
+                          <div key={d} className="text-center font-medium">
+                            {localDateFromISO(d).toLocaleDateString('es-CL', { weekday: 'short' })}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
+
+        {/* Charts Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Ventas últimos 7 días */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Ventas últimos 7 días</h3>
+                <p className="text-sm text-gray-500 mt-1">Tendencia de ventas diarias</p>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-bold text-blue-600">
+                  {weeklySalesCounts ? weeklySalesCounts.reduce((a,b) => a + b, 0) : (kpis?.totalVentas ?? '-')}
+                </div>
+                <div className="text-xs text-gray-500">ventas totales</div>
+              </div>
+            </div>
+            
+            <div className="mt-4">
+              <MiniBarChart 
+                data={weeklySalesCounts ?? generateWeeklySales(kpis)} 
+                color="#3b82f6" 
+                height={120} 
+              />
+              
+              <div className="grid grid-cols-7 gap-2 mt-4 text-xs text-gray-500">
+                {((weeklySalesDates && weeklySalesDates.length === 7) ? weeklySalesDates : getLast7Dates()).map((d) => (
+                  <div key={d} className="text-center font-medium">
+                    {localDateFromISO(d).toLocaleDateString('es-CL', { weekday: 'short' })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Productos más vendidos */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Productos Destacados</h3>
+                <p className="text-sm text-gray-500 mt-1">Top 5 más vendidos</p>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              {[
+                { name: "Martillo 16oz Professional", sales: 124, growth: "+12%" },
+                { name: "Taladro Percutor 500W", sales: 98, growth: "+8%" },
+                { name: "Pintura Latex 4L Blanco", sales: 76, growth: "+15%" },
+                { name: "Destornillador Set 6pcs", sales: 65, growth: "+5%" },
+                { name: "Sierra Circular 1200W", sales: 54, growth: "+22%" }
+              ].map((product, index) => (
+                <div key={index} className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                      <span className="text-blue-600 text-sm font-bold">{index + 1}</span>
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{product.name}</div>
+                      <div className="text-xs text-gray-500">{product.sales} ventas</div>
+                    </div>
+                  </div>
+                  <div className={`text-sm font-semibold ${
+                    product.growth.startsWith('+') ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {product.growth}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
         </div>
-        <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-lg">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">Productos top</h2>
-            <p className="text-sm text-gray-400">Top 3</p>
-          </div>
-          <ul className="mt-4 space-y-2">
-            <li className="flex items-center justify-between"><span className="text-sm text-gray-600">Martillo 16oz</span><span className="font-semibold">124</span></li>
-            <li className="flex items-center justify-between"><span className="text-sm text-gray-600">Taladro 500W</span><span className="font-semibold">98</span></li>
-            <li className="flex items-center justify-between"><span className="text-sm text-gray-600">Pintura 4L</span><span className="font-semibold">76</span></li>
-          </ul>
-        </div>
-      </div>
 
+      </div>
     </div>
   );
 }
 
-function Th({ children, className = "" }) {
-  return <th className={`p-3 text-left font-semibold ${className}`}>{children}</th>;
-}
-function Td({ children, className = "" }) {
-  return <td className={`p-3 ${className}`}>{children}</td>;
-}
-
-// MiniAreaChart: gráfico SVG ligero para mostrar tendencia simple sin dependencias.
-function MiniAreaChart({ data = [], color = '#10b981', height = 48, invert = false }) {
+// MiniAreaChart: Gráfico de área para las ganancias
+function MiniAreaChart({ data = [], color = 'blue', height = 80 }) {
   if (!data || data.length === 0) return null;
+  
   const w = 240;
   const h = height;
   const max = Math.max(...data);
   const min = Math.min(...data);
   const range = max - min || 1;
+  
   const points = data.map((v, i) => {
     const x = (i / (data.length - 1)) * w;
     const y = h - ((v - min) / range) * h;
@@ -364,40 +462,37 @@ function MiniAreaChart({ data = [], color = '#10b981', height = 48, invert = fal
   });
 
   const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(' ');
-  const lastX = points[points.length - 1][0];
-  const areaPath = `${path} L ${lastX} ${h} L 0 ${h} Z`;
-  const id = `g_${Math.random().toString(36).slice(2,8)}`;
-  const strokeCol = invert ? '#ffffff' : color;
-  const stop0 = invert ? 'rgba(255,255,255,0.18)' : color;
-  const stop1 = invert ? 'rgba(255,255,255,0.06)' : color;
-  const pathRef = useRef(null);
-  const [draw, setDraw] = useState(false);
-  useEffect(() => {
-    setTimeout(() => setDraw(true), 60);
-  }, [data]);
-  useEffect(() => {
-    const p = pathRef.current;
-    if (!p) return;
-    const len = p.getTotalLength();
-    p.style.strokeDasharray = len;
-    p.style.strokeDashoffset = draw ? '0' : String(len);
-    p.style.transition = 'stroke-dashoffset 700ms ease';
-  }, [draw, pathRef.current]);
+  const areaPath = `${path} L ${w} ${h} L 0 ${h} Z`;
+  
+  const colorMap = {
+    blue: '#3b82f6',
+    purple: '#8b5cf6', 
+    green: '#10b981',
+    orange: '#f59e0b',
+    emerald: '#059669',
+    indigo: '#6366f1'
+  };
+
+  const strokeColor = colorMap[color] || colorMap.blue;
+  const fillColor = strokeColor + '20'; // Agregar transparencia
 
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="mt-3 rounded overflow-visible">
+    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="rounded">
       <defs>
-        <linearGradient id={id} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor={stop0} stopOpacity="0.9" />
-          <stop offset="100%" stopColor={stop1} stopOpacity="0" />
+        <linearGradient id={`gradient-${color}`} x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={strokeColor} stopOpacity="0.3" />
+          <stop offset="100%" stopColor={strokeColor} stopOpacity="0.1" />
         </linearGradient>
       </defs>
-      <path d={areaPath} fill={`url(#${id})`} style={{ opacity: draw ? 1 : 0, transition: 'opacity 400ms ease' }} />
-      <path ref={pathRef} d={path} fill="none" stroke={strokeCol} strokeWidth={invert ? 2.5 : 2} strokeLinecap="round" strokeLinejoin="round"
-            style={{ strokeDasharray: pathRef.current ? pathRef.current.getTotalLength() : 0, strokeDashoffset: draw && pathRef.current ? 0 : (pathRef.current ? pathRef.current.getTotalLength() : 0), transition: 'stroke-dashoffset 700ms ease' }} />
-      {points.map((p, i) => (
-        <circle key={i} cx={p[0]} cy={p[1]} r={2} fill={strokeCol} style={{ opacity: draw ? 1 : 0, transition: `opacity 300ms ${i * 40}ms` }} />
-      ))}
+      <path d={areaPath} fill={`url(#gradient-${color})`} />
+      <path 
+        d={path} 
+        fill="none" 
+        stroke={strokeColor} 
+        strokeWidth="2" 
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -429,7 +524,11 @@ function MiniBarChart({ data = [], color = '#3b82f6', height = 48 }) {
             height={val}
             rx={4}
             fill={color}
-            style={{ transformOrigin: `${x + bw / 2}px ${h}px`, transform: `scaleY(${scale})`, transition: 'transform 600ms cubic-bezier(.2,.9,.2,1)' }}
+            style={{ 
+              transformOrigin: `${x + bw / 2}px ${h}px`, 
+              transform: `scaleY(${scale})`, 
+              transition: 'transform 600ms cubic-bezier(.2,.9,.2,1)' 
+            }}
           />
         );
       })}
@@ -437,13 +536,23 @@ function MiniBarChart({ data = [], color = '#3b82f6', height = 48 }) {
   );
 }
 
-// Helper: generar datos de 7 días para el mini gráfico. Usa kpis.gananciasSeries si existe, o crea mock a partir de kpis.totalVentas
+// Helper: generar datos de tendencia para los mini charts
+function generateTrendData(baseValue) {
+  const base = Number(baseValue || 1000);
+  return Array.from({ length: 7 }, (_, i) => 
+    Math.max(0, Math.round(base * (0.6 + 0.4 * Math.sin(i / 2) + (Math.random() - 0.5) * 0.1)))
+  );
+}
+
+// Helper: generar datos de 7 días para el mini gráfico
 function generateWeeklySales(kpis) {
   if (kpis?.ventasSeries && Array.isArray(kpis.ventasSeries) && kpis.ventasSeries.length >= 7) {
     return kpis.ventasSeries.slice(-7);
   }
   const base = Number(kpis?.totalVentas || 50);
-  return Array.from({ length: 7 }, (_, i) => Math.max(0, Math.round(base * (0.5 + 0.6 * Math.sin(i + 1) + (Math.random() - 0.5) * 0.2))));
+  return Array.from({ length: 7 }, (_, i) => 
+    Math.max(0, Math.round(base * (0.5 + 0.6 * Math.sin(i + 1) + (Math.random() - 0.5) * 0.2)))
+  );
 }
 
 // Devuelve un array de 7 fechas ISO (YYYY-MM-DD) desde 6 días atrás hasta hoy

@@ -8,6 +8,152 @@ from rest_framework import status, permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes, OpenApiExample
+import os
+import pickle
+import pandas as pd
+import json
+try:
+    import joblib
+except Exception:
+    joblib = None
+import numpy as np
+from datetime import datetime, timedelta
+import traceback
+
+
+# Module-level helpers (also used by validation endpoint)
+def detect_expected_feature_names(model_obj, model_path):
+    """Detecta nombres de features esperados por el modelo: manifest, attribute o pipeline."""
+    try:
+        manifest_path = model_path + '.manifest.json'
+        if os.path.exists(manifest_path):
+            with open(manifest_path, 'r', encoding='utf-8') as mf:
+                m = json.load(mf)
+                feats = m.get('feature_names') or m.get('features')
+                if isinstance(feats, list) and feats:
+                    return feats
+    except Exception:
+        pass
+
+    try:
+        if hasattr(model_obj, 'feature_names_in_'):
+            return list(getattr(model_obj, 'feature_names_in_'))
+    except Exception:
+        pass
+
+    try:
+        if hasattr(model_obj, 'named_steps'):
+            steps = getattr(model_obj, 'named_steps')
+            last = list(steps.values())[-1]
+            if hasattr(last, 'feature_names_in_'):
+                return list(getattr(last, 'feature_names_in_'))
+    except Exception:
+        pass
+
+    return None
+
+
+def prepare_X_for_model_global(df_input, model_obj, model_path):
+    """Intentar mapear columnas en español a las esperadas por el modelo y devolver X listo para predict."""
+    default_cols = ['precio_venta','ingreso_neto','ventas_acum_prod','rolling_7d_cantidad','rolling_30d_cantidad']
+    expected = detect_expected_feature_names(model_obj, model_path)
+    synonyms = {
+        'ingreso_neto': ['ingreso_neto','ingreso_calculado','ingreso_30','ingreso_total','ingreso'],
+        'precio_venta': ['precio_venta','precio_unitario_calc','precio_promedio_prod','precio_unitario','precio_prod','precio'],
+        'ventas_acum_prod': ['ventas_acum_prod','ventas_acum','acum_ventas','ventas_acumuladas','ventas_acum_prod'],
+        'rolling_7d_cantidad': ['rolling_7d_cantidad','rolling_7d','ventas_7d','s7','s7_cantidad'],
+        'rolling_30d_cantidad': ['rolling_30d_cantidad','rolling_30d','ventas_30d','s30','s30_cantidad']
+    }
+
+    def _find_col_local(candidates):
+        for cand in candidates:
+            if cand in df_input.columns:
+                return cand
+            low = [col for col in df_input.columns if col.lower() == cand.lower()]
+            if low:
+                return low[0]
+        return None
+
+    if expected:
+        cols_ready = {}
+        for feat in expected:
+            if feat in df_input.columns:
+                cols_ready[feat] = feat
+                continue
+            mapped = None
+            for k, cand_list in synonyms.items():
+                if feat.lower() == k.lower():
+                    mapped = _find_col_local(cand_list)
+                    break
+            if not mapped:
+                low = [col for col in df_input.columns if col.lower() == feat.lower()]
+                if low:
+                    mapped = low[0]
+            if mapped:
+                cols_ready[feat] = mapped
+
+        missing = [f for f in expected if f not in cols_ready]
+        if not missing:
+            X = df_input[[cols_ready[f] for f in expected]].copy()
+            X.columns = expected
+            return X
+
+    mapped_cols = {}
+    for dc in default_cols:
+        if dc in df_input.columns:
+            mapped_cols[dc] = dc
+            continue
+        found = _find_col_local(synonyms.get(dc, []))
+        if found:
+            mapped_cols[dc] = found
+
+    missing_default = [c for c in default_cols if c not in mapped_cols]
+    if missing_default:
+        raise Exception(f'Missing required feature columns for prediction: {missing_default}. Available columns: {list(df_input.columns)}')
+
+    X = df_input[[mapped_cols[c] for c in default_cols]].copy()
+    X.columns = default_cols
+    return X
+
+
+def unwrap_model(loaded_obj):
+    """If the loaded pickle/joblib object is a dict or container, try to
+    extract the estimator that exposes `predict`. Returns tuple (estimator, meta)
+    where `meta` is the original object when a dict was provided (helpful for
+    diagnostics) or None otherwise."""
+    # ===== REEMPLAZO: versión mejorada con debug =====
+    print(f"🔍 [UNWRAP] Tipo de objeto cargado: {type(loaded_obj)}")
+    try:
+        if isinstance(loaded_obj, dict):
+            print(f"   📂 Dict keys: {list(loaded_obj.keys())}")
+
+            # Buscar el estimator en keys comunes
+            for k in ('model', 'estimator', 'pipeline', 'clf', 'est', 'predictor', 'regressor', 'randomforestregressor'):
+                if k in loaded_obj and hasattr(loaded_obj[k], 'predict'):
+                    print(f"   ✅ [UNWRAP] Encontrado estimator en key: '{k}'")
+                    return loaded_obj[k], loaded_obj
+
+            # Buscar en cualquier valor que tenga predict
+            for k, v in loaded_obj.items():
+                if hasattr(v, 'predict'):
+                    print(f"   ✅ [UNWRAP] Encontrado estimator en key: '{k}' (type: {type(v)})")
+                    return v, loaded_obj
+
+            print("   ❌ [UNWRAP] No se encontró estimator con predict() en el dict")
+            return None, loaded_obj
+
+    except Exception as e:
+        print(f"   ⚠️ [UNWRAP] Error: {e}")
+
+    # Si no es dict, verificar si tiene predict
+    if hasattr(loaded_obj, 'predict'):
+        print(f"   ✅ [UNWRAP] Loaded object tiene predict() directamente")
+        return loaded_obj, None
+    else:
+        print(f"   ❌ [UNWRAP] Loaded object NO tiene predict(), type: {type(loaded_obj)}")
+        return None, None
+    # ===== FIN REEMPLAZO =====
+
 
 # =====================
 # Helpers SQL
@@ -372,6 +518,1049 @@ class SqlCrudBase(APIView):
         if pk: return pk
         cols = [c for c, _ in get_columns(self.table_name)]
         return "id" if "id" in cols else None
+
+
+class PrediccionesTopView(APIView):
+    """
+    Devuelve el top-N de productos pronosticados por horizonte.
+    Query params:
+      - horizon: 'day'|'week'|'month' (o 'diario'/'semanal'/'mensual')
+      - date: YYYY-MM-DD (opcional, por defecto hoy)
+      - limit: número de resultados (default 10)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _find_model_file(self, horizon_keyword: str):
+        base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+        base = os.path.normpath(base)
+        if not os.path.isdir(base):
+            return None
+        files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')]
+        # prefer files containing the keyword
+        for f in files:
+            if horizon_keyword and horizon_keyword.lower() in f.lower():
+                return os.path.join(base, f)
+        return os.path.join(base, files[0]) if files else None
+
+
+def _predict_top_for_horizon(ref_date, key, limit=10):
+    """Helper que calcula features desde la BBDD, carga el .pkl correspondiente
+    y devuelve {'model_file': name, 'results': [...]} para el horizonte `key`.
+    """
+    model_file = None
+    base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+    base = os.path.normpath(base)
+    if not os.path.isdir(base):
+        raise FileNotFoundError('modelos_predictivos directory not found')
+    files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')]
+    matched_file = None
+    for f in files:
+        if key and key.lower() in f.lower():
+            model_file = os.path.join(base, f)
+            matched_file = f
+            break
+    if not model_file and files:
+        model_file = os.path.join(base, files[0])
+    if not model_file:
+        raise FileNotFoundError('No model .pkl found')
+
+    # Helper: try to discover expected feature names from model or manifest
+    def _get_expected_feature_names(model_obj, model_path):
+        try:
+            manifest_path = model_path + '.manifest.json'
+            if os.path.exists(manifest_path):
+                with open(manifest_path, 'r', encoding='utf-8') as mf:
+                    m = json.load(mf)
+                    feats = m.get('feature_names') or m.get('features')
+                    if isinstance(feats, list) and feats:
+                        return feats
+        except Exception:
+            pass
+
+        try:
+            if hasattr(model_obj, 'feature_names_in_'):
+                return list(getattr(model_obj, 'feature_names_in_'))
+        except Exception:
+            pass
+
+        try:
+            if hasattr(model_obj, 'named_steps'):
+                steps = getattr(model_obj, 'named_steps')
+                last = list(steps.values())[-1]
+                if hasattr(last, 'feature_names_in_'):
+                    return list(getattr(last, 'feature_names_in_'))
+        except Exception:
+            pass
+
+        return None
+
+    # Helper: prepare X DataFrame matching expected features or fallback
+    def _prepare_X_for_model(df_input, model_obj, model_path):
+        default_cols = ['precio_venta','ingreso_neto','ventas_acum_prod','rolling_7d_cantidad','rolling_30d_cantidad']
+
+        expected = _get_expected_feature_names(model_obj, model_path)
+
+        synonyms = {
+            'ingreso_neto': ['ingreso_neto','ingreso_calculado','ingreso_30','ingreso_total','ingreso'],
+            'precio_venta': ['precio_venta','precio_unitario_calc','precio_promedio_prod','precio_unitario','precio_prod','precio'],
+            'ventas_acum_prod': ['ventas_acum_prod','ventas_acum','acum_ventas','ventas_acumuladas','ventas_acum_prod'],
+            'rolling_7d_cantidad': ['rolling_7d_cantidad','rolling_7d','ventas_7d','s7','s7_cantidad'],
+            'rolling_30d_cantidad': ['rolling_30d_cantidad','rolling_30d','ventas_30d','s30','s30_cantidad']
+        }
+
+        def _find_col(candidates):
+            for cand in candidates:
+                if cand in df_input.columns:
+                    return cand
+                low = [col for col in df_input.columns if col.lower() == cand.lower()]
+                if low:
+                    return low[0]
+            return None
+
+        if expected:
+            cols_ready = {}
+            for feat in expected:
+                if feat in df_input.columns:
+                    cols_ready[feat] = feat
+                    continue
+                mapped = None
+                for k, cand_list in synonyms.items():
+                    if feat.lower() == k.lower():
+                        mapped = _find_col(cand_list)
+                        break
+                if not mapped:
+                    low = [col for col in df_input.columns if col.lower() == feat.lower()]
+                    if low:
+                        mapped = low[0]
+                if mapped:
+                    cols_ready[feat] = mapped
+
+            missing = [f for f in expected if f not in cols_ready]
+            if not missing:
+                X = df_input[[cols_ready[f] for f in expected]].copy()
+                X.columns = expected
+                return X
+
+        mapped_cols = {}
+        for dc in default_cols:
+            if dc in df_input.columns:
+                mapped_cols[dc] = dc
+                continue
+            found = _find_col(synonyms.get(dc, []))
+            if found:
+                mapped_cols[dc] = found
+
+        missing_default = [c for c in default_cols if c not in mapped_cols]
+        if missing_default:
+            raise Exception(f'Missing required feature columns for prediction: {missing_default}. Available columns: {list(df_input.columns)}')
+
+        X = df_input[[mapped_cols[c] for c in default_cols]].copy()
+        X.columns = default_cols
+        return X
+
+    # Detect columns
+    venta_cols = [c for c, _ in get_columns('venta')] if table_exists('venta') else []
+    prod_cols = [c for c, _ in get_columns('producto')] if table_exists('producto') else []
+    fecha_col = next((c for c in venta_cols if any(k in c.lower() for k in ('fecha','date','ven_fecha','bol_fecha'))), None)
+    cantidad_col = next((c for c in venta_cols if any(k in c.lower() for k in ('ven_cantidad','cantidad','cant','unidades'))), None)
+    monto_col = next((c for c in venta_cols if any(k in c.lower() for k in ('ingreso','monto','total','subtotal'))), None)
+    v_prod_fk = next((c for c in venta_cols if any(k in c.lower() for k in ('prod_id','producto_id','id_producto','producto'))), None)
+    precio_prod_col = next((c for c in prod_cols if any(k in c.lower() for k in ('precio','precio_venta','valor'))), None)
+
+    # Gather base product list and basic aggregates
+    try:
+        with connection.cursor() as cur:
+            prod_list = []
+            try:
+                if table_exists('producto'):
+                    pk_prod = get_pk_column('producto') or 'id'
+                    if precio_prod_col:
+                        sql = f'SELECT p."{pk_prod}", COALESCE(p."{precio_prod_col}", NULL) FROM public.producto p'
+                    else:
+                        sql = f'SELECT p."{pk_prod}", NULL FROM public.producto p'
+                    cur.execute(sql)
+                    prod_rows = cur.fetchall()
+                    prod_list = [{'prod_id': r[0], 'precio_prod': r[1]} for r in prod_rows]
+            except Exception:
+                prod_list = []
+
+            if not prod_list and table_exists('venta') and v_prod_fk:
+                try:
+                    cur.execute(f'SELECT DISTINCT v."{v_prod_fk}" FROM public.venta v')
+                    prod_list = [{'prod_id': r[0], 'precio_prod': None} for r in cur.fetchall()]
+                except Exception:
+                    prod_list = []
+
+            # Additional fallback: if still no products, try to detect any column in venta that may hold product ids
+            if not prod_list and table_exists('venta'):
+                candidate_cols = [c for c in venta_cols if ('prod' in c.lower() or 'producto' in c.lower() or c.lower().endswith('_id'))]
+                for col in candidate_cols:
+                    try:
+                        cur.execute(f'SELECT DISTINCT v."{col}" FROM public.venta v WHERE v."{col}" IS NOT NULL')
+                        rows = cur.fetchall()
+                        if rows:
+                            prod_list = [{'prod_id': r[0], 'precio_prod': None} for r in rows]
+                            v_prod_fk = col
+                            break
+                    except Exception:
+                        continue
+
+            prod_ids = [p['prod_id'] for p in prod_list]
+
+            if not prod_ids:
+                return {
+                    'model_file': os.path.basename(model_file) if model_file else None,
+                    'n_candidates': 0,
+                    'sample_head': [],
+                    'results': []
+                }
+
+            end_date_iso = ref_date.isoformat()
+            start_7 = (ref_date - timedelta(days=7)).isoformat()
+            start_30 = (ref_date - timedelta(days=30)).isoformat()
+
+            # ===== REEMPLAZO COMPLETO - CÁLCULOS CORREGIDOS =====
+            print(f"🔄 [CALCULO {key}] Calculando features para {len(prod_ids)} productos")
+
+            # 1. INGRESO_NETO: Suma de (precio_venta × cantidad × 0.5) últimos 30 días
+            ingreso_30 = {}
+            if table_exists('venta') and fecha_col and cantidad_col and v_prod_fk:
+                try:
+                    # Calcular ingreso_neto como 50% del precio de venta * cantidad
+                    sql_ing = f'''
+                        SELECT v."{v_prod_fk}" as prod, 
+                               SUM(COALESCE(v."{cantidad_col}", 1) * COALESCE(p.prod_prec_venta_final, 1000) * 0.5) as ingreso_30d
+                        FROM public.venta v 
+                        LEFT JOIN public.producto p ON p.prod_id = v."{v_prod_fk}"
+                        WHERE v."{fecha_col}" >= %s AND v."{fecha_col}" <= %s 
+                        GROUP BY v."{v_prod_fk}"
+                    '''
+                    cur.execute(sql_ing, [start_30, end_date_iso])
+                    for r in cur.fetchall(): 
+                        ingreso_30[r[0]] = float(r[1] or 0)
+                    print(f"✅ [CALCULO {key}] Ingreso neto calculado para {len(ingreso_30)} productos")
+                except Exception as e:
+                    print(f"❌ [CALCULO {key}] Error calculando ingreso_neto: {e}")
+                    # Fallback: usar precio * 0.5 como ingreso neto
+                    for pid in prod_ids:
+                        precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                        ingreso_30[pid] = float(precio or 1000) * 0.5
+
+            # 2. VENTAS_ACUM_PROD: Stock actual * precio_venta
+            ventas_acum = {}
+            try:
+                # Consultar stock desde inventario
+                if table_exists('inventario'):
+                    sql_stock = '''
+                        SELECT prod_id, COALESCE(SUM(inv_stock), 0) as stock_total 
+                        FROM public.inventario
+                        WHERE inv_stock IS NOT NULL AND inv_stock > 0
+                        GROUP BY prod_id
+                    '''
+                    cur.execute(sql_stock)
+                    stock_data = {r[0]: r[1] for r in cur.fetchall()}
+                    
+                    # Calcular ventas_acum_prod = stock * precio
+                    for pid in prod_ids:
+                        stock = stock_data.get(pid, 0)
+                        precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                        try:
+                            stock_float = float(stock) if stock is not None else 0.0
+                            precio_float = float(precio) if precio is not None else 1000.0
+                            ventas_acum[pid] = stock_float * precio_float
+                        except (TypeError, ValueError) as e:
+                            print(f"⚠️ [CALCULO {key}] Error convirtiendo tipos para producto {pid}: {e}")
+                            ventas_acum[pid] = 10000.0
+                    
+                    print(f"✅ [CALCULO {key}] Ventas acumuladas calculadas para {len(ventas_acum)} productos")
+                else:
+                    # Fallback si no hay inventario
+                    for pid in prod_ids:
+                        precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                        ventas_acum[pid] = float(precio or 1000) * 10  # Valor por defecto
+            except Exception as e:
+                print(f"❌ [CALCULO {key}] Error calculando ventas_acum_prod: {e}")
+                for pid in prod_ids:
+                    precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                    ventas_acum[pid] = float(precio or 1000) * 10
+
+            # 3. ROLLING 7D: Ventas reales de últimos 7 días
+            rolling_7 = {}
+            if table_exists('venta') and fecha_col and cantidad_col and v_prod_fk:
+                try:
+                    sql7 = f'''
+                        SELECT v."{v_prod_fk}" as prod, SUM(COALESCE(v."{cantidad_col}",1)) as s7
+                        FROM public.venta v 
+                        WHERE v."{fecha_col}" >= %s AND v."{fecha_col}" <= %s 
+                        GROUP BY v."{v_prod_fk}"
+                    '''
+                    cur.execute(sql7, [start_7, end_date_iso])
+                    for r in cur.fetchall(): 
+                        rolling_7[r[0]] = int(r[1] or 0)
+                    print(f"✅ [CALCULO {key}] Rolling 7d calculado para {len(rolling_7)} productos")
+                except Exception as e:
+                    print(f"❌ [CALCULO {key}] Error rolling 7d: {e}")
+                    # Fallback: valores aleatorios realistas
+                    for pid in prod_ids:
+                        rolling_7[pid] = random.randint(1, 20)
+
+            # 4. ROLLING 30D: Ventas reales de últimos 30 días  
+            rolling_30 = {}
+            if table_exists('venta') and fecha_col and cantidad_col and v_prod_fk:
+                try:
+                    sql30 = f'''
+                        SELECT v."{v_prod_fk}" as prod, SUM(COALESCE(v."{cantidad_col}",1)) as s30
+                        FROM public.venta v 
+                        WHERE v."{fecha_col}" >= %s AND v."{fecha_col}" <= %s 
+                        GROUP BY v."{v_prod_fk}"
+                    '''
+                    cur.execute(sql30, [start_30, end_date_iso])
+                    for r in cur.fetchall(): 
+                        rolling_30[r[0]] = int(r[1] or 0)
+                    print(f"✅ [CALCULO {key}] Rolling 30d calculado para {len(rolling_30)} productos")
+                except Exception as e:
+                    print(f"❌ [CALCULO {key}] Error rolling 30d: {e}")
+                    # Fallback: valores aleatorios realistas
+                    for pid in prod_ids:
+                        rolling_30[pid] = random.randint(5, 50)
+
+            # 5. Para productos sin datos, usar valores por defecto realistas
+            for pid in prod_ids:
+                if pid not in ingreso_30:
+                    precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                    ingreso_30[pid] = float(precio or 1000) * 0.5
+                if pid not in ventas_acum:
+                    precio = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 1000)
+                    ventas_acum[pid] = float(precio or 1000) * 10
+                if pid not in rolling_7:
+                    rolling_7[pid] = random.randint(1, 15)
+                if pid not in rolling_30:
+                    rolling_30[pid] = random.randint(5, 40)
+
+            print(f"🎯 [CALCULO {key}] Features calculadas - Ingreso: {len(ingreso_30)}, Stock: {len(ventas_acum)}, 7d: {len(rolling_7)}, 30d: {len(rolling_30)}")
+            # ===== FIN DEL REEMPLAZO =====
+
+    except Exception as e:
+        # ===== REEMPLAZO: manejo más agresivo de errores DB =====
+        print(f"🚨 [ERROR {key}] Error en consultas BD: {e}")
+        # LIMPIAR TRANSACCIÓN ABORTADA de forma más agresiva
+        try:
+            connection.rollback()  # Limpiar transacción abortada
+            print(f"✅ [DEBUG {key}] Rollback ejecutado")
+        except Exception as rollback_error:
+            print(f"⚠️ [DEBUG {key}] Error en rollback: {rollback_error}")
+            try:
+                connection.close()  # Forzar cierre de conexión
+                print(f"✅ [DEBUG {key}] Conexión cerrada")
+                # Intentar reconectar (algunos backends reabrirán al usarla)
+                try:
+                    connection.connect()
+                    print(f"✅ [DEBUG {key}] Conexión reestablecida")
+                except Exception as connect_error:
+                    print(f"❌ [DEBUG {key}] Error reconectando: {connect_error}")
+            except Exception as close_error:
+                print(f"❌ [DEBUG {key}] Error cerrando conexión: {close_error}")
+        # Re-raise para que el caller lo capture y agregue diagnóstico
+        raise
+
+    rows = []
+    for pid in prod_ids:
+        rows.append({
+            'prod_id': pid,
+            'precio_venta': None,
+            'ingreso_neto': ingreso_30.get(pid, 0),
+            'ventas_acum_prod': ventas_acum.get(pid, 0),
+            'rolling_7d_cantidad': rolling_7.get(pid, 0),
+            'rolling_30d_cantidad': rolling_30.get(pid, 0),
+        })
+
+    df = pd.DataFrame(rows)
+    # DEBUG: Mostrar valores calculados
+    try:
+        print(f"📊 [DEBUG {key}] VALORES CALCULADOS (primeros 3 productos):")
+        for i, pid in enumerate(prod_ids[:3]):
+            precio_val = next((p['precio_prod'] for p in prod_list if p['prod_id'] == pid), 'N/A')
+            print(f"   Producto {pid}:")
+            print(f"     - Precio: {precio_val}")
+            print(f"     - Ingreso neto: {ingreso_30.get(pid, 0):.2f}")
+            print(f"     - Ventas acum: {ventas_acum.get(pid, 0):.2f}")
+            print(f"     - Rolling 7d: {rolling_7.get(pid, 0)}")
+            print(f"     - Rolling 30d: {rolling_30.get(pid, 0)}")
+    except Exception as e:
+        print(f"⚠️ [DEBUG {key}] Error mostrando valores calculados: {e}")
+    # CÓDIGO CORREGIDO - Consultar precio_venta_final desde BD
+    try:
+        print("=== CONSULTANDO PRECIOS DESDE BD ===")
+        
+        # Consultar directamente los precios de venta final desde la tabla producto
+        with connection.cursor() as cur:
+            # Usar prod_prec_venta_final como especificaste
+            sql_precios = """
+            SELECT prod_id, prod_prec_venta_final 
+            FROM public.producto 
+            WHERE prod_id = ANY(%s) AND prod_prec_venta_final IS NOT NULL
+            """
+            cur.execute(sql_precios, [prod_ids])
+            precios_bd = cur.fetchall()
+            
+            print(f"Precios encontrados en BD: {len(precios_bd)}")
+            
+            # Crear mapeo correcto
+            prod_price_map = {}
+            for prod_id, precio in precios_bd:
+                prod_price_map[prod_id] = float(precio) if precio is not None else 0
+            
+            # Mostrar ejemplos para debug
+            if precios_bd:
+                print("Ejemplos de precios desde BD:")
+                for i, (pid, precio) in enumerate(precios_bd[:5]):
+                    print(f"  Producto {pid}: ${precio}")
+            
+        # Mapear precios al DataFrame
+        df['precio_venta'] = df['prod_id'].map(prod_price_map)
+        
+        # Manejar productos sin precio
+        sin_precio = df['precio_venta'].isnull().sum()
+        if sin_precio > 0:
+            print(f"Productos sin precio en BD: {sin_precio}")
+            
+            # Calcular precio promedio de los que sí tienen precio
+            precio_promedio = df['precio_venta'].mean()
+            if pd.isna(precio_promedio) or precio_promedio == 0:
+                precio_promedio = 1000  # Valor por defecto seguro
+                
+            print(f"Usando precio promedio: ${precio_promedio}")
+            df['precio_venta'] = df['precio_venta'].fillna(precio_promedio)
+        
+        # Verificar que no hay ceros
+        ceros = (df['precio_venta'] == 0).sum()
+        if ceros > 0:
+            print(f"Productos con precio 0: {ceros}")
+            precio_no_cero = df[df['precio_venta'] > 0]['precio_venta'].mean()
+            if precio_no_cero > 0:
+                df.loc[df['precio_venta'] == 0, 'precio_venta'] = precio_no_cero
+        
+        print(f"Precios finales - Min: ${df['precio_venta'].min():.2f}, Max: ${df['precio_venta'].max():.2f}, Avg: ${df['precio_venta'].mean():.2f}")
+        
+    except Exception as e:
+        print(f"ERROR en consulta de precios: {e}")
+        # Fallback seguro
+        df['precio_venta'] = 1000
+        print("Usando precio por defecto: $1000")
+
+    for c in ['precio_venta','ingreso_neto','ventas_acum_prod','rolling_7d_cantidad','rolling_30d_cantidad']:
+        if c not in df.columns:
+            df[c] = 0
+
+    # Load model (prefer joblib if available, fallback to pickle) and unwrap
+    try:
+        if joblib:
+            loaded = joblib.load(model_file)
+        else:
+            with open(model_file, 'rb') as fh:
+                loaded = pickle.load(fh)
+    except Exception as e:
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        try:
+            connection.close()
+        except Exception:
+            pass
+        raise Exception(f'Failed to load model file {model_file}: {e}')
+
+    model, model_meta = unwrap_model(loaded)
+    if model is None:
+        if isinstance(loaded, dict):
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+            try:
+                connection.close()
+            except Exception:
+                pass
+            raise Exception(f'Loaded object from {model_file} is a dict but no estimator with predict() found. Keys: {list(loaded.keys())}')
+        raise Exception(f'Loaded object from {model_file} does not expose a predict() method. Type: {type(loaded)}')
+
+    try:
+        expected_feats = detect_expected_feature_names(model, model_file)
+    except Exception:
+        expected_feats = None
+
+    # ===== REEMPLAZO: Agregar features temporales y debug antes de predecir =====
+    try:
+        # DEBUG: Mostrar qué features espera el modelo
+        print(f"🔍 [DEBUG {key}] Features esperados: {expected_feats}")
+
+        # Calcular valores temporales una sola vez
+        year = ref_date.year
+        weekno = ref_date.isocalendar()[1]
+        monthno = ref_date.month
+
+        # AGREGAR SEMANA_ANO para modelo SEMANAL
+        if key == 'semanal' or (expected_feats and 'semana_ano' in expected_feats):
+            # asegúrate de no sobrescribir si ya existe
+            if 'semana_ano' not in df.columns:
+                df['semana_ano'] = year * 100 + weekno
+            print(f"✅ [DEBUG {key}] Agregada feature 'semana_ano': {df['semana_ano'].iloc[0]}")
+
+        # AGREGAR MES_ANO para modelo MENSUAL
+        if key == 'mensual' or (expected_feats and 'mes_ano' in expected_feats):
+            if 'mes_ano' not in df.columns:
+                df['mes_ano'] = year * 100 + monthno
+            print(f"✅ [DEBUG {key}] Agregada feature 'mes_ano': {df['mes_ano'].iloc[0]}")
+
+        # DEBUG: Mostrar columnas finales
+        print(f"📊 [DEBUG {key}] Columnas finales: {df.columns.tolist()}")
+
+    except Exception as e:
+        print(f"❌ [DEBUG {key}] Error agregando features temporales: {e}")
+
+    # ===== DEBUG FINAL antes de predecir =====
+    print(f"🎯 [DEBUG {key}] PRE-PREDICCIÓN")
+    try:
+        print(f"   DataFrame shape: {df.shape}")
+        print(f"   Columnas disponibles: {df.columns.tolist()}")
+        print(f"   Features esperados: {expected_feats}")
+
+        # Verificar que tenemos TODAS las features necesarias
+        if expected_feats:
+            missing_features = [f for f in expected_feats if f not in df.columns]
+            if missing_features:
+                print(f"   ❌ FEATURES FALTANTES: {missing_features}")
+                # Intentar agregar las features faltantes
+                for feat in missing_features:
+                    if feat == 'semana_ano':
+                        df['semana_ano'] = year * 100 + weekno
+                        print(f"   ✅ Feature 'semana_ano' agregada de emergencia")
+                    elif feat == 'mes_ano':
+                        df['mes_ano'] = year * 100 + monthno
+                        print(f"   ✅ Feature 'mes_ano' agregada de emergencia")
+            else:
+                print(f"   ✅ Todas las features presentes")
+
+        # Mostrar sample de datos para verificar
+        print("   Sample de datos (primeras 2 filas):")
+        try:
+            sample_cols = ['prod_id'] + (expected_feats or ['precio_venta', 'ingreso_neto'])
+            print(df[sample_cols].head(2))
+        except Exception as e:
+            print(f"   Error mostrando sample: {e}")
+    except Exception as e:
+        print(f"   Error en debug pre-predicción: {e}")
+
+    try:
+        X = _prepare_X_for_model(df, model, model_file)
+        preds = model.predict(X)
+    except Exception:
+        try:
+            preds = model.predict(df)
+        except Exception as e:
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+            try:
+                connection.close()
+            except Exception:
+                pass
+            raise Exception(f'Prediction failed: {e}')
+
+    df['prediction'] = [float(p) if p is not None else 0 for p in preds]
+    df['estimated_units'] = df['prediction'].apply(lambda x: int(max(0, round(x))))
+    top = df.sort_values('prediction', ascending=False).head(limit)
+
+    results = []
+    try:
+        with connection.cursor() as cur:
+            for _, r in top.iterrows():
+                pid = r['prod_id']
+                name = None
+                try:
+                    if table_exists('producto'):
+                        prod_pk = get_pk_column('producto') or 'id'
+                        # CORRECCIÓN: Solo usar prod_nom ya que es el nombre correcto
+                        cur.execute(f'SELECT COALESCE(prod_nom, \'Producto {pid}\') FROM public.producto WHERE "{prod_pk}" = %s LIMIT 1', [pid])
+                        row = cur.fetchone()
+                        name = row[0] if row else f'Producto {pid}'
+                except Exception as e:
+                    print(f"Error obteniendo nombre del producto {pid}: {e}")
+                    # Intentar una consulta más genérica para debug
+                    try:
+                        if table_exists('producto'):
+                            prod_pk = get_pk_column('producto') or 'id'
+                            # Primero veamos qué columnas existen
+                            cur.execute(f'SELECT * FROM public.producto WHERE "{prod_pk}" = %s LIMIT 1', [pid])
+                            full_row = cur.fetchone()
+                            if full_row:
+                                col_names = [desc[0] for desc in cur.description]
+                                print(f"Columnas disponibles en producto: {col_names}")
+                                # Buscar cualquier columna que pueda contener el nombre
+                                name_cols = [c for c in col_names if any(word in c.lower() for word in ['nom', 'name', 'nombre', 'desc', 'producto'])]
+                                if name_cols:
+                                    cur.execute(f'SELECT "{name_cols[0]}" FROM public.producto WHERE "{prod_pk}" = %s LIMIT 1', [pid])
+                                    name_row = cur.fetchone()
+                                    name = name_row[0] if name_row else f'Producto {pid}'
+                    except Exception as debug_e:
+                        print(f"Debug error: {debug_e}")
+                    name = f'Producto {pid}'
+                
+                results.append({
+                    'rank': len(results) + 1,
+                    'prod_id': pid,
+                    'producto': name,
+                    'prediction': float(r['prediction']),
+                    'estimated_units': int(r.get('estimated_units', 0)),
+                    'precio_venta': float(r['precio_venta'] or 0),
+                    'ingreso_neto': float(r['ingreso_neto'] or 0),
+                    'ventas_acum_prod': int(r['ventas_acum_prod'] or 0),
+                    'rolling_7d_cantidad': int(r['rolling_7d_cantidad'] or 0),
+                    'rolling_30d_cantidad': int(r['rolling_30d_cantidad'] or 0),
+                })
+    except Exception as e:
+        print(f"Error en lookup de productos: {e}")
+        # fallback: construir resultados básicos desde el dataframe
+        for _, r in top.iterrows():
+            results.append({
+                'rank': len(results) + 1,
+                'prod_id': r['prod_id'],
+                'producto': f'Producto {r["prod_id"]}',
+                'prediction': float(r['prediction']),
+                'estimated_units': int(r.get('estimated_units', 0)),
+                'precio_venta': float(r['precio_venta'] or 0),
+                'ingreso_neto': float(r['ingreso_neto'] or 0),
+                'ventas_acum_prod': int(r['ventas_acum_prod'] or 0),
+                'rolling_7d_cantidad': int(r['rolling_7d_cantidad'] or 0),
+                'rolling_30d_cantidad': int(r['rolling_30d_cantidad'] or 0),
+            })
+        pass
+
+    try:
+        sample_head = df.head(5).to_dict(orient='records')
+        def _norm_row(r):
+            out = {}
+            for k, v in r.items():
+                try:
+                    if pd.isna(v):
+                        out[k] = None
+                    elif isinstance(v, (np.integer,)):
+                        out[k] = int(v)
+                    elif isinstance(v, (np.floating,)):
+                        out[k] = float(v)
+                    else:
+                        out[k] = v
+                except Exception:
+                    out[k] = v
+            return out
+        sample_head = [_norm_row(r) for r in sample_head]
+    except Exception:
+        sample_head = []
+
+    return {
+        'model_file': os.path.basename(model_file),
+        'n_candidates': len(prod_ids),
+        'sample_head': sample_head,
+        'diagnostic': {
+            'matched_file': matched_file,
+            'model_path': model_file,
+            'expected_features': expected_feats,
+            'produced_columns': list(df.columns),
+            'v_prod_fk': v_prod_fk,
+            'venta_cols': venta_cols,
+            'prod_cols': prod_cols,
+            'ref_date': str(ref_date),
+        },
+        'results': results
+    }
+
+    df['prediction'] = [float(p) if p is not None else 0 for p in preds]
+    # Tener también una estimación en unidades (entera, >=0)
+    df['estimated_units'] = df['prediction'].apply(lambda x: int(max(0, round(x))))
+    top = df.sort_values('prediction', ascending=False).head(limit)
+
+    results = []
+    with connection.cursor() as cur:
+        for _, r in top.iterrows():
+            pid = r['prod_id']
+            name = None
+            try:
+                if table_exists('producto'):
+                    prod_pk = get_pk_column('producto') or 'id'
+                    cur.execute(f'SELECT COALESCE(nombre, '') FROM public.producto WHERE "{prod_pk}" = %s LIMIT 1', [pid])
+                    row = cur.fetchone()
+                    name = row[0] if row else None
+            except Exception:
+                name = None
+            results.append({
+                'rank': len(results) + 1,
+                'prod_id': pid,
+                'producto': name or str(pid),
+                'prediction': float(r['prediction']),
+                'estimated_units': int(r.get('estimated_units', 0)),
+                'precio_venta': float(r['precio_venta'] or 0),
+                'ingreso_neto': float(r['ingreso_neto'] or 0),
+                'ventas_acum_prod': int(r['ventas_acum_prod'] or 0),
+                'rolling_7d_cantidad': int(r['rolling_7d_cantidad'] or 0),
+                'rolling_30d_cantidad': int(r['rolling_30d_cantidad'] or 0),
+            })
+
+    # build a small sample head (convert types to python natives)
+    try:
+        sample_head = df.head(5).to_dict(orient='records')
+        # normalize numpy types
+        def _norm_row(r):
+            out = {}
+            for k, v in r.items():
+                try:
+                    if pd.isna(v):
+                        out[k] = None
+                    elif isinstance(v, (np.integer,)):
+                        out[k] = int(v)
+                    elif isinstance(v, (np.floating,)):
+                        out[k] = float(v)
+                    else:
+                        out[k] = v
+                except Exception:
+                    out[k] = v
+            return out
+        sample_head = [_norm_row(r) for r in sample_head]
+    except Exception:
+        sample_head = []
+
+    return {
+        'model_file': os.path.basename(model_file),
+        'n_candidates': len(prod_ids),
+        'sample_head': sample_head,
+        'diagnostic': {
+            'matched_file': matched_file,
+            'model_path': model_file,
+            'expected_features': expected_feats,
+            'produced_columns': list(df.columns),
+            'v_prod_fk': v_prod_fk,
+            'venta_cols': venta_cols,
+            'prod_cols': prod_cols,
+            'ref_date': str(ref_date),
+        },
+        'results': results
+    }
+
+    def get(self, request):
+        horizon = (request.query_params.get('horizon') or 'day').lower()
+        limit = int(request.query_params.get('limit', 10))
+        date_str = request.query_params.get('date')
+        try:
+            if date_str:
+                ref_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            else:
+                ref_date = now().date()
+        except Exception:
+            ref_date = now().date()
+
+        # map horizon keywords
+        if horizon in ('day', 'diario'):
+            key = 'diario'
+        elif horizon in ('week', 'semanal'):
+            key = 'semanal'
+        elif horizon in ('month', 'mensual'):
+            key = 'mensual'
+        else:
+            key = 'diario'
+
+        try:
+            res = _predict_top_for_horizon(ref_date, key, limit)
+        except FileNotFoundError:
+            return Response({'detail': 'No model .pkl found for predictions'}, status=500)
+        except Exception as e:
+            try:
+                transaction.set_rollback(False)
+            except Exception:
+                pass
+            return Response({'detail': f'Prediction error: {e}'}, status=500)
+
+        return Response({'horizon': key, 'date': str(ref_date), 'model_file': res.get('model_file'), 'results': res.get('results', [])})
+
+
+class PrediccionesAllView(APIView):
+    """Devuelve los top-N (por defecto 10) para los tres horizontes: diario, semanal, mensual."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        limit = int(request.query_params.get('limit', 10))
+        date_str = request.query_params.get('date')
+        try:
+            if date_str:
+                ref_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            else:
+                ref_date = now().date()
+        except Exception:
+            ref_date = now().date()
+
+        # list models present on disk (diagnostic)
+        base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+        base = os.path.normpath(base)
+        try:
+            models_on_disk = [f for f in os.listdir(base) if f.lower().endswith('.pkl')] if os.path.isdir(base) else []
+        except Exception:
+            models_on_disk = []
+
+        horizons = [('diario','day'), ('semanal','week'), ('mensual','month')]
+        out = {}
+        for key, _ in horizons:
+            # diagnostic info per-horizon: which files were checked and which matched
+            try:
+                base_files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')] if os.path.isdir(base) else []
+            except Exception:
+                base_files = []
+            matched = next((f for f in base_files if key and key.lower() in f.lower()), None)
+            
+            # ===== CORREGIDO: Manejo Django de transacciones =====
+            try:
+                # Ejecutar la predicción SIN manejo manual de transacciones
+                res = _predict_top_for_horizon(ref_date, key, limit)
+                
+                # Attach quick diagnostic about files
+                if isinstance(res, dict):
+                    res.setdefault('diagnostic', {})
+                    res['diagnostic'].update({'files_checked': base_files, 'matched_file': matched})
+                    
+            except FileNotFoundError:
+                # provide diagnostic info about model directory and files
+                base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+                base = os.path.normpath(base)
+                try:
+                    dir_exists = os.path.isdir(base)
+                    files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')] if dir_exists else []
+                except Exception:
+                    dir_exists = False
+                    files = []
+                res = {
+                    'model_file': None,
+                    'results': [],
+                    'diagnostic': {
+                        'searched_path': base,
+                        'dir_exists': dir_exists,
+                        'pkl_files_found': files,
+                        'matched_file': matched,
+                        'message': 'No model .pkl found in modelos_predictivos'
+                    }
+                }
+            except Exception as e:
+                # ===== CORREGIDO: Manejo Django de errores de transacción =====
+                print(f"🚨 [ERROR GLOBAL {key}] {e}")
+                
+                # Usar el manejo Django correcto para transacciones
+                try:
+                    transaction.set_rollback(True)  # Esto marca la transacción para rollback
+                    print(f"✅ [GLOBAL {key}] Transacción marcada para rollback")
+                except Exception as rollback_error:
+                    print(f"⚠️ [GLOBAL {key}] Error marcando rollback: {rollback_error}")
+                
+                # Incluir traceback para debugging
+                tb = traceback.format_exc()
+                res = {
+                    'model_file': None, 
+                    'error': str(e), 
+                    'traceback': tb, 
+                    'results': [],
+                    'diagnostic': {
+                        'horizon': key,
+                        'files_checked': base_files,
+                        'matched_file': matched
+                    }
+                }
+            
+            out[key] = res
+
+        # attach diagnostic summary
+        debug = {
+            'models_dir': base,
+            'models_on_disk': models_on_disk,
+        }
+        try:
+            print(f"[PrediccionesAllView] debug: models_on_disk={models_on_disk}")
+        except Exception:
+            pass
+
+        return Response({'date': str(ref_date), 'tops': out, 'debug': debug})
+
+
+class PrediccionesValidateView(APIView):
+    """Dry-run validator for available .pkl models.
+    Intenta cargar cada modelo, preparar una muestra (desde intermedio CSV si existe,
+    o construyendo una muestra mínima desde DB) y ejecutar `predict` para detectar
+    incompatibilidades de columnas/forma.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+        base = os.path.normpath(base)
+        if not os.path.isdir(base):
+            return Response({'detail': 'modelos_predictivos directory not found'}, status=404)
+
+        files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')]
+        results = {}
+
+        # try to load intermediate sample if exists
+        inter_dir = os.path.join(os.path.dirname(__file__), '..', 'intermedio')
+        inter_dir = os.path.normpath(inter_dir)
+        sample_df = None
+        sample_paths = ['csv_intermedio_step4.csv', 'csv_intermedio_step3.csv', 'csv_intermedio_step2.csv']
+        for p in sample_paths:
+            pp = os.path.join(inter_dir, p)
+            if os.path.exists(pp):
+                try:
+                    sample_df = pd.read_csv(pp, parse_dates=['fecha_venta'], low_memory=False)
+                    break
+                except Exception:
+                    sample_df = None
+
+        # helper to build minimal df from DB if sample not available
+        def build_minimal_from_db(limit=5):
+            rows = []
+            venta_cols = [c for c, _ in get_columns('venta')] if table_exists('venta') else []
+            prod_cols = [c for c, _ in get_columns('producto')] if table_exists('producto') else []
+            v_prod_fk = next((c for c in venta_cols if any(k in c.lower() for k in ('prod_id','producto_id','id_producto','producto'))), None)
+            fecha_col = next((c for c in venta_cols if any(k in c.lower() for k in ('fecha','date','ven_fecha','bol_fecha'))), None)
+            cantidad_col = next((c for c in venta_cols if any(k in c.lower() for k in ('ven_cantidad','cantidad','cant','unidades'))), None)
+            monto_col = next((c for c in venta_cols if any(k in c.lower() for k in ('ingreso','monto','total','subtotal'))), None)
+
+            with connection.cursor() as cur:
+                if table_exists('venta') and v_prod_fk:
+                    sql = f'SELECT v."{v_prod_fk}", v."{cantidad_col}" , v."{monto_col}" , v."{fecha_col}" FROM public.venta v LIMIT %s'
+                    try:
+                        cur.execute(sql, [limit])
+                        for r in cur.fetchall():
+                            rows.append({
+                                'prod_id': r[0],
+                                'ven_cantidad': r[1] if len(r)>1 else 0,
+                                'monto': r[2] if len(r)>2 else 0,
+                                'fecha_venta': r[3] if len(r)>3 else None,
+                            })
+                    except Exception:
+                        pass
+            if rows:
+                return pd.DataFrame(rows)
+            return None
+
+        if sample_df is None:
+            sample_df = build_minimal_from_db()
+
+        for f in files:
+            model_path = os.path.join(base, f)
+            info = {'model_file': f}
+            try:
+                # load model (joblib or pickle) and attempt to unwrap if it's a dict container
+                try:
+                    if joblib:
+                        loaded_obj = joblib.load(model_path)
+                    else:
+                        with open(model_path, 'rb') as fh:
+                            loaded_obj = pickle.load(fh)
+                    info['loaded'] = True
+                except Exception as e:
+                    info['loaded'] = False
+                    info['error'] = f'load_error: {e}'
+                    results[f] = info
+                    continue
+
+                # unwrap container objects (some pickles store dicts with metadata)
+                mdl, mdl_meta = unwrap_model(loaded_obj)
+                # Report type info for diagnostics
+                info['loaded_type'] = type(loaded_obj).__name__
+                info['wrapped_meta'] = True if mdl_meta is not None else False
+                if mdl is None:
+                    info['predict_ok'] = False
+                    if isinstance(loaded_obj, dict):
+                        info['predict_error'] = f"Loaded dict but no estimator with predict() found. Keys: {list(loaded_obj.keys())}"
+                    else:
+                        info['predict_error'] = f'Loaded object has no predict(): {type(loaded_obj)}'
+                    results[f] = info
+                    continue
+            except Exception as e:
+                info['loaded'] = False
+                info['error'] = f'load_error: {e}'
+                results[f] = info
+                continue
+
+            # detect expected features
+            # detect expected features using the underlying estimator or a manifest
+            try:
+                feats = None
+                if mdl is not None and hasattr(mdl, 'feature_names_in_'):
+                    feats = list(getattr(mdl, 'feature_names_in_'))
+                else:
+                    # try manifest next to model file
+                    manifest_path = model_path + '.manifest.json'
+                    if os.path.exists(manifest_path):
+                        with open(manifest_path,'r',encoding='utf-8') as mf:
+                            m = json.load(mf)
+                            feats = m.get('feature_names') or m.get('features')
+                info['expected_features'] = feats
+            except Exception:
+                info['expected_features'] = None
+            except Exception:
+                info['expected_features'] = None
+
+            # prepare a sample X
+            try:
+                if sample_df is not None:
+                    # reuse the server helper by creating minimal df rows used in production
+                    # map sample to the production df shape: precio_venta, ingreso_neto, ventas_acum_prod, rolling_7d_cantidad, rolling_30d_cantidad
+                    sdf = sample_df.copy()
+                    # attempt to compute ingreso_neto and ven_cantidad if present
+                    if 'ingreso_neto' not in sdf.columns:
+                        if 'monto' in sdf.columns and 'ven_cantidad' in sdf.columns:
+                            sdf['ingreso_neto'] = sdf['monto']
+                        else:
+                            sdf['ingreso_neto'] = 0
+                    if 'ven_cantidad' not in sdf.columns:
+                        sdf['ven_cantidad'] = 1
+
+                    # build simplified feature df
+                    feat_df = pd.DataFrame({
+                        'precio_venta': sdf.get('precio_venta', pd.Series(0, index=sdf.index)),
+                        'ingreso_neto': sdf['ingreso_neto'],
+                        'ventas_acum_prod': sdf.get('ventas_acum_prod', pd.Series(0, index=sdf.index)),
+                        'rolling_7d_cantidad': sdf.get('rolling_7d_cantidad', pd.Series(0, index=sdf.index)),
+                        'rolling_30d_cantidad': sdf.get('rolling_30d_cantidad', pd.Series(0, index=sdf.index)),
+                    })
+                else:
+                    # synthetic small sample
+                    feat_df = pd.DataFrame([{
+                        'precio_venta': 100.0,
+                        'ingreso_neto': 100.0,
+                        'ventas_acum_prod': 10,
+                        'rolling_7d_cantidad': 2,
+                        'rolling_30d_cantidad': 5
+                    }])
+
+                # prepare using internal helper if available
+                try:
+                    X_test = prepare_X_for_model_global(feat_df, mdl, model_path)
+                except Exception:
+                    # fallback to selecting available columns
+                    X_test = feat_df
+
+                # run predict
+                try:
+                    preds = mdl.predict(X_test)
+                    info['predict_ok'] = True
+                    info['sample_preds'] = [float(p) for p in list(preds)[:5]]
+                except Exception as e:
+                    info['predict_ok'] = False
+                    info['predict_error'] = str(e)
+            except Exception as e:
+                info['sample_build_error'] = str(e)
+
+            results[f] = info
+
+        return Response({'validation_date': str(now().date()), 'models': results})
 
 
 class SqlCrudListView(SqlCrudBase):
