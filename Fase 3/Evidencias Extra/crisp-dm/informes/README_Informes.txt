@@ -11,15 +11,7 @@ Aquí se concentran los materiales destinados tanto a la revisión técnica como
 Notebook de Jupyter que contiene el informe técnico completo del proyecto.  
 Integra los resultados obtenidos en cada fase del proceso CRISP-DM, presentando de forma estructurada la metodología, análisis, modelos aplicados, métricas de evaluación y conclusiones finales.  
 Funciona como documento central de referencia para auditar o replicar el trabajo realizado.
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
- 🖼️ presentacion.pptx
-
-Archivo de presentación en formato PowerPoint utilizado para la exposición final del proyecto.  
-Resume de manera visual los puntos más relevantes del informe técnico: contexto, objetivos, enfoque metodológico, resultados, interpretaciones y conclusiones.  
-Está diseñado para comunicar de forma clara y concisa los logros y aprendizajes del proyecto ante un público académico, técnico o directivo.
-
+ 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 📌 Resumen:  
