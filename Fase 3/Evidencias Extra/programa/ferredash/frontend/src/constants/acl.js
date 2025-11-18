@@ -2,6 +2,7 @@
 export const MENU_BY_ROLE = {
   gerente: [
     { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/predicciones", label: "Predicciones", icon: "LineChart" },
     { to: "/app/inventario", label: "Inventario", icon: "ClipboardList" },
     { to: "/app/productos", label: "Productos", icon: "Package" },
     { to: "/app/ventas", label: "Ventas", icon: "ShoppingCart" },
@@ -13,11 +14,13 @@ export const MENU_BY_ROLE = {
   ],
   vendedor: [
     { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/predicciones", label: "Predicciones", icon: "LineChart" },
     { to: "/app/ventas", label: "Ventas", icon: "ShoppingCart" },
     { to: "/app/clientes", label: "Clientes", icon: "Users" },
   ],
   data_analyst: [
     { to: "/app/dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+    { to: "/app/predicciones", label: "Predicciones", icon: "LineChart" },
     { to: "/app/reportes", label: "Reportes", icon: "LineChart" },
     { to: "/app/ejecutivo", label: "Ejecutivo", icon: "ShieldCheck" },
   ],

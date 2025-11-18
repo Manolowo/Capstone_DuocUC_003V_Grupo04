@@ -88,35 +88,134 @@ class DashboardKpisView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        suc_id = request.query_params.get('suc_id')
         with connection.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM public.venta;")
-            total_ventas = cur.fetchone()[0]
+            # total ventas: si se filtró por sucursal y podemos unir boleta, aplicar filtro
+            venta_cols_all = [c for c, _ in get_columns("venta")]
+            v_bol_fk = next((c for c in venta_cols_all if any(k in c.lower() for k in ("bol_id","boleta_id","bol","boleta","id_boleta"))), None)
 
-            cur.execute("SELECT COUNT(*) FROM public.producto;")
-            total_productos = cur.fetchone()[0]
+            if suc_id and v_bol_fk and table_exists('boleta'):
+                cur.execute(f'SELECT COUNT(*) FROM public.venta v LEFT JOIN public.boleta b ON b."bol_id" = v."{v_bol_fk}" WHERE b."suc_id" = %s', [suc_id])
+                total_ventas = cur.fetchone()[0]
+            else:
+                cur.execute("SELECT COUNT(*) FROM public.venta;")
+                total_ventas = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM public.cliente;")
-            total_clientes = cur.fetchone()[0]
+            # total productos: si hay inventario por sucursal, contar productos en esa sucursal
+            total_productos = None
+            try:
+                if suc_id and table_exists('inventario'):
+                    inv_cols = [c for c, _ in get_columns('inventario')]
+                    prod_fk_inv = next((c for c in inv_cols if any(k in c.lower() for k in ("prod_id","producto_id","id_producto","producto"))), None)
+                    suc_col_inv = next((c for c in inv_cols if any(k in c.lower() for k in ("suc_id","sucursal"))), None)
+                    prod_pk = get_pk_column('producto') or 'id'
+                    if prod_fk_inv and suc_col_inv:
+                        cur.execute(f'SELECT COUNT(DISTINCT p."{prod_pk}") FROM public.producto p JOIN public.inventario inv ON inv."{prod_fk_inv}" = p."{prod_pk}" WHERE inv."{suc_col_inv}" = %s', [suc_id])
+                        total_productos = cur.fetchone()[0]
+                if total_productos is None:
+                    cur.execute("SELECT COUNT(*) FROM public.producto;")
+                    total_productos = cur.fetchone()[0]
+            except Exception:
+                cur.execute("SELECT COUNT(*) FROM public.producto;")
+                total_productos = cur.fetchone()[0]
 
-            columnas = dict(get_columns("venta"))
-            monto_col = None
-            for posible in ["monto_total", "total", "monto", "importe_total", "precio_total"]:
-                if posible in columnas:
-                    monto_col = posible
-                    break
+            # total clientes: if sucursal provided, count distinct clients via boleta
+            if suc_id and table_exists('boleta'):
+                boleta_cols = [c for c, _ in get_columns('boleta')]
+                cli_col = next((c for c in boleta_cols if any(k in c.lower() for k in ("cli_id","cliente","id_cliente","cli"))), None)
+                suc_col = next((c for c in boleta_cols if any(k in c.lower() for k in ("suc_id","sucursal"))), None)
+                if cli_col and suc_col:
+                    cur.execute(f'SELECT COUNT(DISTINCT b."{cli_col}") FROM public.boleta b WHERE b."{suc_col}" = %s', [suc_id])
+                    total_clientes = cur.fetchone()[0]
+                else:
+                    cur.execute("SELECT COUNT(*) FROM public.cliente;")
+                    total_clientes = cur.fetchone()[0]
+            else:
+                cur.execute("SELECT COUNT(*) FROM public.cliente;")
+                total_clientes = cur.fetchone()[0]
+
+            # Detectar columnas relevantes en la tabla venta
+            venta_cols = [c for c, _ in get_columns("venta")]
+            columnas = {c: t for c, t in get_columns("venta")}
+            monto_col = next((c for c in ["monto_total", "total", "monto", "importe_total", "precio_total", "subtotal", "ven_subtotal", "sub_total", "subtotal_venta", "ven_sub"] if c in venta_cols), None)
+            cantidad_col = next((c for c in ["ven_cantidad","cantidad", "cant", "cantidad_total", "unidades"] if c in venta_cols), None)
+            v_prod_fk = next((c for c in ["producto_id", "prod_id", "id_producto", "producto"] if c in venta_cols), None)
+
+            # Intentar detectar columna de precio en producto
+            precio_col = None
+            try:
+                prod_cols = [c for c, _ in get_columns("producto")]
+                precio_col = next((c for c in ["precio", "precio_unitario", "valor", "precio_venta", "precio_prod", "precio_lista"] if c in prod_cols), None)
+            except Exception:
+                prod_cols = []
+
+            ganancia = 0.0
+
+            # Si existe columna monto, intentar cálculo más preciso (aplicar filtro por sucursal si corresponde)
             ganancia = 0.0
             if monto_col:
-                cur.execute(f'SELECT COALESCE(SUM("{monto_col}"),0) FROM public.venta;')
-                ganancia = float(cur.fetchone()[0] or 0)
+                # build base join/filter for sucursal if requested
+                suc_join = ''
+                suc_params = []
+                if suc_id and v_bol_fk and table_exists('boleta'):
+                    suc_join = f' LEFT JOIN public.boleta b ON b."bol_id" = v."{v_bol_fk}" '
+                    suc_filter = ' WHERE b."suc_id" = %s '
+                    suc_params = [suc_id]
+                else:
+                    suc_filter = ''
+
+                if cantidad_col:
+                    # intentar obtener precio unitario: preferir columna en producto, si no, buscar en venta
+                    prod_pk = get_pk_column("producto") or "id"
+                    venta_unit_price_col = next((c for c in venta_cols_all if c in ["ven_precio_unitario","precio_unit","precio","valor","precio_venta","precio_u","precio_unitario"]), None)
+                    unit_price_expr = None
+                    prod_join = ''
+                    if precio_col:
+                        unit_price_expr = f'COALESCE(p."{precio_col}",0)'
+                        prod_join = f' LEFT JOIN public.producto p ON p."{prod_pk}" = v."{v_prod_fk}" '
+                    elif venta_unit_price_col:
+                        unit_price_expr = f'COALESCE(v."{venta_unit_price_col}",0)'
+
+                    if unit_price_expr:
+                        sql = f'''
+                            SELECT COALESCE(SUM(
+                              (COALESCE(v."{monto_col}",0) - ({unit_price_expr}) * COALESCE(v."{cantidad_col}",1)*0.9) * 0.80
+                            ),0) AS ganancia
+                            FROM public.venta v
+                            {prod_join}
+                            {suc_join}
+                            {suc_filter}
+                        '''
+                        # combine params for sucursal if any
+                        cur.execute(sql, suc_params)
+                        ganancia = float(cur.fetchone()[0] or 0)
+                    else:
+                        # fallback si no hay precio unitario: aproximar con subtotal
+                        sql = f'SELECT COALESCE(SUM((COALESCE("{monto_col}",0) - 0.5 * COALESCE("{monto_col}",0)) * 0.85),0) FROM public.venta v {suc_join} {suc_filter};'
+                        cur.execute(sql, suc_params)
+                        ganancia = float(cur.fetchone()[0] or 0)
+                else:
+                    # no hay cantidad: fallback por subtotal
+                    sql = f'SELECT COALESCE(SUM((COALESCE("{monto_col}",0) - 0.5 * COALESCE("{monto_col}",0)) * 0.85),0) FROM public.venta v {suc_join} {suc_filter};'
+                    cur.execute(sql, suc_params)
+                    ganancia = float(cur.fetchone()[0] or 0)
+            else:
+                ganancia = 0.0
 
         return Response({
             "totalVentas": total_ventas,
             "totalProductos": total_productos,
             "totalClientes": total_clientes,
-            "gananciasTotales": ganancia
+            "gananciasTotales": ganancia,
+            # campos de diagnóstico (opcionales) para ayudar a depurar nombres de columnas
+            "ventaColumns": venta_cols,
+            "productoColumns": prod_cols,
+            "montoColumnDetected": monto_col,
+            "precioColumnDetected": precio_col,
+            "cantidadColumnDetected": cantidad_col,
+            "productoFkDetected": v_prod_fk,
         })
-
-
+    
 class UltimasVentasView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -141,19 +240,41 @@ class UltimasVentasView(APIView):
         monto_expr = f'COALESCE(v."{monto_col}",0)' if monto_col else '0'
         cantidad_expr = f'COALESCE(v."{cantidad_col}",1)' if cantidad_col else '1'
 
+        # Construir SELECT y JOINs de forma condicional para evitar referenciar
+        # columnas que no existen (que causaría errores 500).
+        select_parts = [f'v.{pk} AS id']
+        join_clauses = []
+
+        if v_cli_fk and v_cli_fk in colnames:
+            select_parts.append("COALESCE(c.nombre,'N/A') AS cliente")
+            join_clauses.append(f'LEFT JOIN public.cliente c ON c.id = v."{v_cli_fk}"')
+        else:
+            select_parts.append("'N/A' AS cliente")
+
+        if v_prod_fk and v_prod_fk in colnames:
+            select_parts.append("COALESCE(p.nombre,'Producto') AS item")
+            join_clauses.append(f'LEFT JOIN public.producto p ON p.id = v."{v_prod_fk}"')
+        else:
+            select_parts.append("'Producto' AS item")
+
+        select_parts.append(f"{cantidad_expr}::int AS cantidad")
+        select_parts.append(f"{monto_expr}::numeric AS monto")
+
+        if fecha_col:
+            select_parts.append(f'v."{fecha_col}" AS fecha')
+            order_clause = f'v."{fecha_col}" DESC NULLS LAST, v.{pk} DESC'
+        else:
+            select_parts.append('NULL AS fecha')
+            order_clause = f'v.{pk} DESC'
+
         sql = f"""
-            SELECT v.{pk} AS id,
-                   COALESCE(c.nombre,'N/A') AS cliente,
-                   COALESCE(p.nombre,'Producto') AS item,
-                   {cantidad_expr}::int AS cantidad,
-                   {monto_expr}::numeric AS monto,
-                   v."{fecha_col}" AS fecha
+            SELECT {', '.join(select_parts)}
             FROM public.venta v
-            LEFT JOIN public.cliente  c ON c.id = v."{v_cli_fk}"
-            LEFT JOIN public.producto p ON p.id = v."{v_prod_fk}"
-            ORDER BY v."{fecha_col}" DESC NULLS LAST, v.{pk} DESC
+            {' '.join(join_clauses)}
+            ORDER BY {order_clause}
             LIMIT %s
         """
+
         with connection.cursor() as cur:
             cur.execute(sql, [limit])
             rows = dictfetchall(cur)

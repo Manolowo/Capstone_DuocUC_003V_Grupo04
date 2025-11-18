@@ -51,8 +51,8 @@ export const getMe = async (id = 1) => {
   return { data: res.data, status: res.status };
 };
 
-export const getDashboardKpis = async () => {
-  const res = await api.get(`/dashboard/kpis`);
+export const getDashboardKpis = async (params = {}) => {
+  const res = await api.get(`/dashboard/kpis`, { params });
   return { data: res.data, status: res.status };
 };
 
