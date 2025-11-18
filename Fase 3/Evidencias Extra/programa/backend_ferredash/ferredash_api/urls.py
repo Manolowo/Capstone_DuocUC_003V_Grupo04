@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     HealthView, PingView,
     DashboardKpisView, UltimasVentasView,
+    PrediccionesTopView, PrediccionesAllView, PrediccionesValidateView,
     MeView, CustomLoginView,
     SqlCrudListView, SqlCrudDetailView,
     SchemaView, VentaBatchView,
@@ -13,6 +14,9 @@ urlpatterns = [
     path("ping", PingView.as_view()),
     path("dashboard/kpis", DashboardKpisView.as_view()),
     path("dashboard/ultimas-ventas", UltimasVentasView.as_view()),
+    path("predicciones/top", PrediccionesTopView.as_view()),
+    path("predicciones/all", PrediccionesAllView.as_view()),
+    path("predicciones/validate", PrediccionesValidateView.as_view()),
     path("me", MeView.as_view(), name="me"),
     path("login/", CustomLoginView.as_view(), name="custom_login"),
     path("auth/login/", LoginUsuarioView.as_view(), name="login_usuario"),

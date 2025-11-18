@@ -13,6 +13,7 @@ export default function Sidebar() {
   const menuByRole = {
     gerente: [
       { name: "Panel", path: "/", icon: LayoutDashboard },
+      { name: "Predicciones", path: "/app/predicciones", icon: LineChart },
       { name: "Inventario", path: "/inventario", icon: Package },
       { name: "Reportes", path: "/reportes", icon: LineChart },
       { name: "Empleados", path: "/empleados", icon: Users },
@@ -27,6 +28,7 @@ export default function Sidebar() {
     ],
     data_analyst: [
       { name: "Panel", path: "/", icon: LayoutDashboard },
+      { name: "Predicciones", path: "/app/predicciones", icon: LineChart },
       { name: "Modelos Predictivos", path: "/modelos", icon: LineChart },
     ],
   };

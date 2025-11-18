@@ -5,6 +5,7 @@ import Login from "./pages/Login.jsx";
 import SidebarLayout from "./layouts/SidebarLayout.jsx";
 
 import Dashboard from "./pages/app/Dashboard.jsx";
+import Predicciones from "./pages/app/Predicciones.jsx";
 import Clientes from "./pages/app/Clientes.jsx";
 import Productos from "./pages/app/Productos.jsx";
 import Inventario from "./pages/app/Inventario.jsx";
@@ -29,6 +30,7 @@ export default function App() {
         }
       >
         <Route path="dashboard" element={<Dashboard />} />
+        <Route path="predicciones" element={<Predicciones />} />
         <Route path="clientes" element={<Clientes />} />
         <Route path="productos" element={<Productos />} />
         <Route path="inventario" element={<Inventario />} />
