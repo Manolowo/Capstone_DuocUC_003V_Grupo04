@@ -1,0 +1,37 @@
+# ENTORNOS VIRTUALES
+venv/
+*/venv/
+**/venv/
+
+# NODE / REACT
+node_modules/
+*/node_modules/
+**/node_modules/
+dist/
+build/
+
+# PYTHON CACHE
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS CODE
+.vscode/
+
+# ENTORNOS PRIVADOS
+.env
+.env.*
+
+# TEMPORALES
+*.log
+*.tmp
+*.temp
+
+# MIGRACIONES DJANGO (opcional)
+*/migrations/*.py
+!*/migrations/__init__.py
+
+# SISTEMA
+.DS_Store
+Thumbs.db
