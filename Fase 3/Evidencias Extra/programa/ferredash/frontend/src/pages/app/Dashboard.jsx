@@ -16,6 +16,9 @@ export default function Dashboard() {
   const [avgTicket, setAvgTicket] = useState(null);
   const [weeklyAvgSales, setWeeklyAvgSales] = useState(null);
   const [weeklyNewClients, setWeeklyNewClients] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [lastVentaRows, setLastVentaRows] = useState([]);
+  const [showVentasDebug, setShowVentasDebug] = useState(false);
 
   // Cargar KPIs y sucursales; recargar KPIs cuando cambie la sucursal
   useEffect(() => {
@@ -61,6 +64,11 @@ export default function Dashboard() {
           listTable('cliente', params),
         ]);
         const rows = ventasRes?.results || ventasRes?.data || [];
+        // keep a copy of the raw rows for quick debugging
+        if (mounted) {
+          setLastVentaRows(rows);
+          try { console.debug('Dashboard: ventas rows (first 5)', rows.slice(0,5)); } catch (e) {}
+        }
         const clientRows = clientesRes?.results || clientesRes?.data || [];
         // detectar campo fecha en filas
         const dateKey = (rows[0] && Object.keys(rows[0]).find(k => /fecha|date|created_at|ven_fecha|bol_fecha/i.test(k))) || null;
@@ -133,7 +141,7 @@ export default function Dashboard() {
       }
     })();
     return () => { mounted = false };
-  }, [selectedSucursal]);
+  }, [selectedSucursal, refreshKey]);
 
   const formatCurrency = (v) => {
     try {
@@ -253,7 +261,7 @@ export default function Dashboard() {
             <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-gray-600 mt-2">Resumen general de ventas, clientes y métricas de negocio</p>
           </div>
-          
+
           <div className="flex items-center gap-4">
             {error && (
               <div className="flex items-center text-red-600 text-sm">
@@ -263,7 +271,7 @@ export default function Dashboard() {
                 {error}
               </div>
             )}
-            
+
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700">Sucursal:</label>
               <select
@@ -278,6 +286,15 @@ export default function Dashboard() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setRefreshKey(k => k + 1)}
+                className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+              >
+                Refrescar ventas
+              </button>
             </div>
           </div>
         </div>
@@ -311,6 +328,27 @@ export default function Dashboard() {
             );
           })}
         </div>
+
+        {/* Debug panel: mostrar filas crudas devueltas por la API de ventas */}
+        {showVentasDebug && (
+          <div className="mt-6 mb-6 bg-white border border-gray-200 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-medium">Ventas (debug) — {lastVentaRows.length} filas</div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(lastVentaRows.slice(0,50), null, 2))}
+                  className="px-2 py-1 text-xs bg-gray-100 border rounded"
+                >Copiar JSON</button>
+              </div>
+            </div>
+            <div className="overflow-auto max-h-56 text-xs">
+              {lastVentaRows.slice(0,50).map((r, idx) => (
+                <pre key={idx} className="mb-2 bg-gray-50 p-2 rounded">{JSON.stringify(r, null, 2)}</pre>
+              ))}
+              {lastVentaRows.length === 0 && <div className="text-sm text-gray-500">No se devolvieron filas en la última llamada.</div>}
+            </div>
+          </div>
+        )}
 
         {/* Cartas de Ganancias (Más grandes) */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">

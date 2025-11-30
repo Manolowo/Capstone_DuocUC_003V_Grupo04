@@ -1563,6 +1563,141 @@ class PrediccionesValidateView(APIView):
         return Response({'validation_date': str(now().date()), 'models': results})
 
 
+class ModelInfoView(APIView):
+    """Endpoint ligero para exponer metadata de un modelo .pkl.
+    Query params:
+      - model_file: nombre del archivo .pkl (opcional). Si no se provee, lista modelos disponibles.
+    Devuelve JSON con campos: model_file, description, metrics, raw_keys (para objetos dict).
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        base = os.path.join(os.path.dirname(__file__), '..', 'modelos_predictivos')
+        base = os.path.normpath(base)
+        model_file = request.query_params.get('model_file')
+
+        if not os.path.isdir(base):
+            return Response({'detail': 'modelos_predictivos directory not found', 'models_on_disk': []}, status=404)
+
+        files = [f for f in os.listdir(base) if f.lower().endswith('.pkl')]
+
+        if not model_file:
+            # return list of available model files with basic info if manifest exists
+            out = []
+            for f in files:
+                manifest = None
+                try:
+                    mf = os.path.join(base, f + '.manifest.json')
+                    if os.path.exists(mf):
+                        with open(mf, 'r', encoding='utf-8') as fh:
+                            manifest = json.load(fh)
+                except Exception:
+                    manifest = None
+                out.append({'model_file': f, 'has_manifest': bool(manifest), 'manifest': manifest})
+            return Response({'models_on_disk': out})
+
+        # try to find exact or case-insensitive match
+        candidate = None
+        for f in files:
+            if f == model_file or f.lower() == model_file.lower():
+                candidate = f
+                break
+        if not candidate:
+            return Response({'detail': 'model file not found', 'model_file': model_file, 'models_on_disk': files}, status=404)
+
+        model_path = os.path.join(base, candidate)
+
+        # The user requested to NOT use any metadata embedded in the model artifacts.
+        # Instead return a fixed, canonical description + metrics per model horizon.
+        selection_criteria = (
+            "### Criterios de Selección para Producción\n\n"
+            "Basándonos en la evaluación exhaustiva contra los criterios de éxito y el análisis de desempeño, se han establecido los siguientes criterios para la selección del modelo de deployment:\n\n"
+            "1. **Cumplimiento de métricas de precisión** (MAPE ≤ 20%)\n"
+            "2. **Estabilidad y consistencia** across different granularities\n"
+            "3. **Interpretabilidad** para stakeholders del negocio\n"
+            "4. **Capacidad de escalamiento** operativo\n"
+            "5. **Balance entre complejidad y performance**\n\n"
+        )
+
+        # Candidate descriptions and structured metrics per horizon
+        candidates = {
+            'diario': {
+                'title': 'Candidato 1: Decision Tree - Granularidad Diaria',
+                'metrics': {'MAPE': 1.8, 'R2': 0.996, 'MSE': 49.672, 'MAE': 0.895},
+                'score': 8.95,
+            },
+            'semanal': {
+                'title': 'Candidato 2: Random Forest - Granularidad Semanal',
+                'metrics': {'MAPE': 8.7, 'R2': 0.504, 'MSE': 12212.927, 'MAE': 4.333},
+                'score': 8.85,
+            },
+            'mensual': {
+                'title': 'Candidato 3: Random Forest - Granularidad Mensual',
+                'metrics': {'MAPE': 15.2, 'R2': 0.523, 'MSE': 36960.125, 'MAE': 6.105},
+                'score': 7.80,
+            }
+        }
+
+        key = None
+        low = candidate.lower()
+        if 'diario' in low or 'day' in low:
+            key = 'diario'
+        elif 'semanal' in low or 'week' in low:
+            key = 'semanal'
+        elif 'mensual' in low or 'month' in low:
+            key = 'mensual'
+
+        # Default fallback: if we cannot detect the horizon, attempt substring matches
+        if key is None:
+            if 'week' in low:
+                key = 'semanal'
+            elif 'month' in low:
+                key = 'mensual'
+            else:
+                key = 'diario'
+
+        chosen = candidates.get(key, candidates['diario'])
+
+        # Build a descriptive text combining selection criteria and candidate details
+        description = selection_criteria + "\n#### Modelos Candidatos para Deployment\n\n"
+        for kname in ('diario', 'semanal', 'mensual'):
+            c = candidates[kname]
+            description += f"##### **{c['title']}**\n\n"
+            description += ("Performance Metrics:\n"
+                            f"- MAPE: {c['metrics']['MAPE']}%\n"
+                            f"- R²: {c['metrics']['R2']}\n"
+                            f"- MSE: {c['metrics']['MSE']}\n"
+                            f"- MAE: {c['metrics']['MAE']}\n\n")
+
+        # attach a scoring table as structured data too
+        score_table = {
+            'criteria': [
+                {'name': 'Precisión (MAPE)', 'weight': 0.30},
+                {'name': 'Interpretabilidad', 'weight': 0.20},
+                {'name': 'Estabilidad', 'weight': 0.20},
+                {'name': 'Valor Negocio', 'weight': 0.15},
+                {'name': 'Facilidad Implementación', 'weight': 0.15},
+            ],
+            'scores': {
+                'DecisionTree_Diario': {'total': candidates['diario']['score'], 'breakdown': {'precision':10,'interpretability':10,'stability':7,'business_value':9,'ease':10}},
+                'RandomForest_Semanal': {'total': candidates['semanal']['score'], 'breakdown': {'precision':9,'interpretability':7,'stability':10,'business_value':10,'ease':8}},
+                'RandomForest_Mensual': {'total': candidates['mensual']['score'], 'breakdown': {'precision':7,'interpretability':7,'stability':9,'business_value':8,'ease':8}},
+            }
+        }
+
+        info = {
+            'model_file': candidate,
+            'horizon': key,
+            'description': description,
+            'metrics': chosen['metrics'],
+            'selection_score': chosen.get('score'),
+            'score_table': score_table,
+        }
+
+        return Response(info)
+
+
 class SqlCrudListView(SqlCrudBase):
     def get(self, request, table: str):
         self.table_name = table

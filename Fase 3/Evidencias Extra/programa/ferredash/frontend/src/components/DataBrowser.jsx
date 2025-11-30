@@ -35,6 +35,8 @@ export default function DataBrowser({ table, title }) {
   const [selectedPk, setSelectedPk] = useState(null);
   // Venta-specific state
   const [lineItems, setLineItems] = useState([]);
+  const [lineErrors, setLineErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [productResults, setProductResults] = useState([]);
 
@@ -243,8 +245,11 @@ export default function DataBrowser({ table, title }) {
           total = Math.round((raw - (raw * (disc / 100)) + Number.EPSILON) * 100) / 100;
         }
 
-        const nowIso = new Date().toISOString();
-        const boletaPayload = { bol_fecha: nowIso, bol_total: total };
+        const nowLocal = new Date();
+        const boletaPayload = {
+          bol_fecha: `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, '0')}-${String(nowLocal.getDate()).padStart(2, '0')}`,
+          bol_total: total,
+        };
         // carry over client, sucursal, usuario if present in venta row
         const cliKey = Object.keys(row).find(k => /cli|cliente/i.test(k));
         if (cliKey && row[cliKey]) boletaPayload.cli_id = row[cliKey];
@@ -308,19 +313,27 @@ export default function DataBrowser({ table, title }) {
         if (!lineItems || lineItems.length === 0) {
             return alert("Debe agregar al menos un ítem a la venta antes de crear la venta.");
           }
+
+        // validate lines client-side before sending
+        const valid = validateAllLines(lineItems);
+        if (!valid) {
+          return alert('Corrija los errores en las líneas antes de enviar la venta.');
+        }
+
+        setIsSubmitting(true);
           // NOTE: temporalmente omitimos la creación automática de la boleta.
           // Solo creamos las líneas de venta directamente y no intentamos
           // crear/ligar una boleta para evitar fallos en entornos donde
           // el endpoint de boleta no esté disponible.
         const now = new Date();
-        const fechaIso = now.toISOString(); // TIMESTAMP
-        const fecha = fechaIso.slice(0, 10);
+        // build local date YYYY-MM-DD to avoid UTC shifts from toISOString()
+        const fecha = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const hora = now.toTimeString().slice(0, 8);
 
         const total = lineItems.reduce((s, it) => s + (it.subtotal || 0), 0);
         // build boleta payload (minimal). Attach usu_id if available from auth.
         const usuId = user?.id || user?.pk || user?.usu_id || null;
-        const boletaPayload = { bol_fecha: fechaIso, bol_total: total };
+        const boletaPayload = { bol_fecha: fecha, bol_total: total };
         if (usuId) boletaPayload.usu_id = usuId;
 
         // Intentar crear boleta (bol_pdf puede quedar vacío). Si falla, no bloquear la
@@ -356,10 +369,10 @@ export default function DataBrowser({ table, title }) {
           const payload = {};
           if (prodCol) payload[prodCol] = it.productId;
           if (bolCol && boletaId) payload[bolCol] = boletaId;
-          if (priceCol) payload[priceCol] = it.unitPrice;
-          if (qtyCol) payload[qtyCol] = it.quantity;
-          if (discountCol) payload[discountCol] = it.discountPercent;
-          if (subtotalCol) payload[subtotalCol] = it.subtotal;
+          if (priceCol) payload[priceCol] = Number.isFinite(Number(it.unitPrice)) ? Number(it.unitPrice) : 0;
+          if (qtyCol) payload[qtyCol] = Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : 0;
+          if (discountCol) payload[discountCol] = Number.isFinite(Number(it.discountPercent)) ? Number(it.discountPercent) : 0;
+          if (subtotalCol) payload[subtotalCol] = Number.isFinite(Number(it.subtotal)) ? Number(it.subtotal) : 0;
           if (fechaCol) payload[fechaCol] = fecha;
           if (horaCol) payload[horaCol] = hora;
           try {
@@ -368,14 +381,28 @@ export default function DataBrowser({ table, title }) {
             await createRecord("venta", payload);
           } catch (err) {
             console.error("Error creando linea de venta:", payload, err);
-            errors.push(err?.response?.data?.detail || err?.message || String(err));
+            const detail = err?.response?.data?.detail || err?.message || String(err);
+            errors.push({ payload, detail });
           }
         }
         if (errors.length) {
-          // show first error, but log all
-          alert("Algunas líneas no pudieron crearse: " + errors[0]);
+          // show summary of failures
+          console.error("Errores al crear líneas de venta:", errors);
+          const first = errors[0];
+          alert(`Algunas líneas no pudieron crearse (${errors.length}): ${first.detail}`);
         }
 
+        // if all lines failed and we created a boleta, attempt rollback to avoid orphan boleta
+        if (errors.length === lineItems.length && boletaId) {
+          try {
+            await deleteRecord('boleta', boletaId);
+            console.warn('Boleta eliminada por rollback después de fallos en líneas');
+          } catch (delErr) {
+            console.error('No se pudo eliminar boleta tras fallo total:', delErr);
+          }
+        }
+
+        setIsSubmitting(false);
         setShowForm(false);
         await load();
       } else {
@@ -488,17 +515,51 @@ export default function DataBrowser({ table, title }) {
     setProductResults([]);
   }
 
+  function validateLine(it) {
+    const errs = [];
+    if (!it || !it.productId) errs.push('Producto no seleccionado');
+    const price = Number.isFinite(Number(it.unitPrice)) ? Number(it.unitPrice) : NaN;
+    const qty = Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : NaN;
+    const disc = Number.isFinite(Number(it.discountPercent)) ? Number(it.discountPercent) : 0;
+    if (!Number.isFinite(price) || price < 0) errs.push('Precio inválido');
+    if (!Number.isFinite(qty) || qty <= 0) errs.push('Cantidad inválida');
+    const expected = Math.round((price * qty - (price * qty * (disc / 100)) + Number.EPSILON) * 100) / 100;
+    const sub = Number.isFinite(Number(it.subtotal)) ? Number(it.subtotal) : NaN;
+    if (Number.isFinite(sub) && Math.abs(sub - expected) > 1) {
+      // allow small rounding differences, otherwise flag
+      errs.push('Subtotal no coincide (esperado ' + expected + ')');
+    }
+    return errs;
+  }
+
+  function validateAllLines(items) {
+    const errs = {};
+    items.forEach((it, idx) => {
+      const e = validateLine(it);
+      if (e && e.length) errs[idx] = e;
+    });
+    setLineErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
+
   function updateLineItem(idx, patch) {
     setLineItems((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], ...patch };
       // recalc subtotal
-      const price = Number(next[idx].unitPrice) || 0;
-      const qty = Number(next[idx].quantity) || 0;
-      const disc = Number(next[idx].discountPercent) || 0;
+      const price = Number.isFinite(Number(next[idx].unitPrice)) ? Number(next[idx].unitPrice) : 0;
+      const qty = Number.isFinite(Number(next[idx].quantity)) ? Number(next[idx].quantity) : 0;
+      const disc = Number.isFinite(Number(next[idx].discountPercent)) ? Number(next[idx].discountPercent) : 0;
       const raw = price * qty;
       const sub = raw - (raw * (disc / 100));
       next[idx].subtotal = Math.round((sub + Number.EPSILON) * 100) / 100;
+      // validate this line and update lineErrors
+      setLineErrors((prevErrs) => {
+        const copy = { ...prevErrs };
+        const v = validateLine(next[idx]);
+        if (v && v.length) copy[idx] = v; else delete copy[idx];
+        return copy;
+      });
       return next;
     });
   }
@@ -692,6 +753,13 @@ export default function DataBrowser({ table, title }) {
                         <button type="button" onClick={() => removeLineItem(idx)} className="px-2 py-1 text-red-600">Eliminar</button>
                       </div>
                     ))}
+                    {Object.keys(lineErrors).length > 0 && (
+                      <div className="mt-2">
+                        {Object.entries(lineErrors).map(([i, errs]) => (
+                          <div key={i} className="text-xs text-red-600">Línea {Number(i) + 1}: {errs.join(' · ')}</div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-4 text-right">
@@ -700,7 +768,7 @@ export default function DataBrowser({ table, title }) {
 
                   <div className="flex items-center justify-end gap-2 mt-4">
                     <button type="button" onClick={() => setShowForm(false)} className="px-3 py-1 rounded border">Cancelar</button>
-                    <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded">Crear venta</button>
+                    <button type="submit" disabled={isSubmitting} className="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-60">{isSubmitting ? 'Guardando...' : 'Crear venta'}</button>
                   </div>
                 </div>
               ) : (

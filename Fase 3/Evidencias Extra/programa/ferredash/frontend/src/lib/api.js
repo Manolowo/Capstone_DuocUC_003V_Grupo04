@@ -5,7 +5,8 @@ const baseURL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
 
 export const api = axios.create({
   baseURL,
-  timeout: 15000,
+  // timeout en 0 = sin límite; permitir que las peticiones tomen el tiempo necesario
+  timeout: 0,
 });
 
 // Interceptor para añadir token Authorization si existe en localStorage
@@ -26,20 +27,10 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    const status = error?.response?.status;
-    const detail = error?.response?.data?.detail || "";
-    if (status === 401 && /token provisto|token no v[aá]lido|invalid token/i.test(detail)) {
-      try {
-        localStorage.removeItem("tokens");
-        localStorage.removeItem("user");
-      } catch (e) {}
-      // redirigir al login para que el usuario vuelva a autenticarse
-      if (typeof window !== "undefined") {
-        // mostrar alerta breve antes de redirigir
-        alert("Sesión inválida o expirada. Por favor, inicia sesión nuevamente.");
-        window.location.href = "/login";
-      }
-    }
+    // No realizar cierre de sesión automático por timeout/401.
+    // Mantener los tokens en localStorage para que la sesión persista
+    // hasta que el usuario cierre sesión explícitamente o cierre la aplicación.
+    // Dejar que la UI o llamadas específicas manejen errores 401 si es necesario.
     return Promise.reject(error);
   }
 );
