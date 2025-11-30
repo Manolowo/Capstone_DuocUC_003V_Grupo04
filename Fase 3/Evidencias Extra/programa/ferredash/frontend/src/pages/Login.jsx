@@ -39,6 +39,12 @@ export default function Login() {
       if (!res.ok) throw new Error("Usuario o contraseña incorrectos.");
 
       const data = await res.json();
+
+      console.log("🔍 LOGIN RESPONSE:", data);
+      console.log("🔍 USER OBJECT:", data.user);
+      console.log("🔍 USER ROLE:", data.user?.role);
+      console.log("🔍 ALL USER PROPERTIES:", Object.keys(data.user || {}));
+
       const { user, access, refresh } = data;
 
       login(user, { access, refresh });
@@ -114,13 +120,30 @@ export default function Login() {
               placeholder="Contraseña"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              aria-label="Contraseña"
             />
-            <span
+            <button
+              type="button"
               onClick={() => setShowPass(!showPass)}
-              className="absolute right-3 top-2.5 cursor-pointer text-white hover:text-indigo-400 transition"
+              aria-pressed={showPass}
+              aria-label={showPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              title={showPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              className="absolute right-3 top-2 cursor-pointer text-white hover:text-indigo-400 transition p-1 rounded"
             >
-              {showPass ? "🙈" : "👁️"}
-            </span>
+              {showPass ? (
+                // eye-off icon
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-5.523 0-10-4.477-10-10a9.96 9.96 0 012.175-5.625M3 3l18 18" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.88 9.88A3 3 0 0014.12 14.12" />
+                </svg>
+              ) : (
+                // eye icon
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5s8.268 2.943 9.542 7c-1.274 4.057-5.065 7-9.542 7S3.732 16.057 2.458 12z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              )}
+            </button>
           </div>
 
           <button

@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -125,6 +126,19 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+}
+
+# =====================
+# Configuración Simple JWT (tiempos de vida)
+# Nota: aumentar mucho la duración de tokens reduce la seguridad.
+# Mantener esto solo en entornos controlados (desarrollo) o si está
+# justificado por requisitos operativos.
+SIMPLE_JWT = {
+    # Ajustar a la duración que necesites; aquí se establece ~10 años
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=3650),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=3650),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
 }
 
 # =====================
