@@ -8,32 +8,29 @@ import {
 
 export default function Sidebar() {
   const { user } = useAuth();
-
-  // Roles actuales — sin tocar tu lógica
   const menuByRole = {
-    gerente: [
+    admin: [
       { name: "Panel", path: "/", icon: LayoutDashboard },
       { name: "Predicciones", path: "/app/predicciones", icon: LineChart },
-      { name: "Inventario", path: "/inventario", icon: Package },
-      { name: "Reportes", path: "/reportes", icon: LineChart },
-      { name: "Empleados", path: "/empleados", icon: Users },
-      { name: "Proveedores", path: "/proveedores", icon: Store },
-      { name: "Ejecutivo", path: "/ejecutivo", icon: ShieldCheck },
+      { name: "Inventario", path: "/inventario", icon: ClipboardList },
+      { name: "Ventas", path: "/ventas", icon: ShoppingCart },
+      { name: "Clientes", path: "/clientes", icon: Users },
+      { name: "Empleados", path: "/empleados", icon: UserCog },
       { name: "Configuración", path: "/config", icon: Settings },
     ],
     vendedor: [
-      { name: "Panel", path: "/", icon: LayoutDashboard },
-      { name: "Ventas", path: "/ventas", icon: Store },
+      { name: "Inventario", path: "/inventario", icon: ClipboardList },
+      { name: "Ventas", path: "/ventas", icon: ShoppingCart },
       { name: "Clientes", path: "/clientes", icon: Users },
-    ],
-    data_analyst: [
-      { name: "Panel", path: "/", icon: LayoutDashboard },
-      { name: "Predicciones", path: "/app/predicciones", icon: LineChart },
-      { name: "Modelos Predictivos", path: "/modelos", icon: LineChart },
     ],
   };
 
-  const items = menuByRole[user?.role || "gerente"];
+  // Si el rol no es admin o vendedor, usar admin por defecto
+  const currentRole = (user?.role === 'vendedor') ? 'vendedor' : 'admin';
+  const items = menuByRole[currentRole];
+
+  console.log("✅ Rol:", currentRole);
+  console.log("✅ Productos en menú:", items.some(item => item.name === "Productos"));
 
   return (
     <motion.aside
@@ -53,7 +50,7 @@ export default function Sidebar() {
 
       {/* MENU */}
       <nav className="flex flex-col gap-2">
-        {items.map((item, i) => {
+        {items.map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
@@ -66,7 +63,8 @@ export default function Sidebar() {
                   : "text-gray-300 hover:bg-purple-600/10 hover:text-white"}
               `}
             >
-              <Icon size={18} /> {item.name}
+              <Icon size={18} />
+              <span>{item.name}</span>
             </NavLink>
           );
         })}
@@ -75,7 +73,7 @@ export default function Sidebar() {
       {/* USER FOOTER */}
       <div className="mt-auto text-xs text-purple-300/70 tracking-wider">
         <UserCog size={14} className="inline-block mr-2" />
-        {user?.name || "Usuario"} — {user?.role || "gerente"}
+        {user?.name || "Usuario"} — {currentRole}
       </div>
     </motion.aside>
   );

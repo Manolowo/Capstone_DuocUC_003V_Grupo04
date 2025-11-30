@@ -10,6 +10,7 @@ import Clientes from "./pages/app/Clientes.jsx";
 import Productos from "./pages/app/Productos.jsx";
 import Inventario from "./pages/app/Inventario.jsx";
 import Ventas from "./pages/app/Ventas.jsx";
+import Empleados from "./pages/app/Empleados.jsx";
 
 function PrivateRoute({ children }) {
   const { user } = useAuth();
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="clientes" element={<Clientes />} />
         <Route path="productos" element={<Productos />} />
         <Route path="inventario" element={<Inventario />} />
+        <Route path="empleados" element={<Empleados />} />
         <Route path="ventas" element={<Ventas />} />
       </Route>
 

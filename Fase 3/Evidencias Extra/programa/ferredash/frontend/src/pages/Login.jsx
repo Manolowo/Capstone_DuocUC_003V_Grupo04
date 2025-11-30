@@ -39,6 +39,12 @@ export default function Login() {
       if (!res.ok) throw new Error("Usuario o contraseña incorrectos.");
 
       const data = await res.json();
+
+      console.log("🔍 LOGIN RESPONSE:", data);
+      console.log("🔍 USER OBJECT:", data.user);
+      console.log("🔍 USER ROLE:", data.user?.role);
+      console.log("🔍 ALL USER PROPERTIES:", Object.keys(data.user || {}));
+
       const { user, access, refresh } = data;
 
       login(user, { access, refresh });
